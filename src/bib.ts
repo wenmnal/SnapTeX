@@ -10,28 +10,25 @@ export class BibTexParser {
     public static parse(content: string): Map<string, BibEntry> {
         const entries = new Map<string, BibEntry>();
 
-        // --- Deep Cleaning ---
-        // Normalize line endings
-        let clean = content.replace(/\r\n/g, '\n');
-        // Remove C++ style comments
-        clean = clean.replace(/^\s*\/\/\s+.*/gm, '');
-        // Remove LaTeX style comments (ensure not escaped)
-        clean = clean.replace(/(?<!\\)%.*$/gm, '');
-        // Normalize Entry Start
-        clean = clean.replace(/@([a-zA-Z]+)\s*\{\s*/g, '@$1{');
+        // scan the raw content directly and clean ONLY the extracted tiny blocks.
 
-        // Regex to find the start of an entry: @article{key,
-        const entryRegex = /@([a-zA-Z]+)\{([^,\s\}]+)\s*,/g;
+        // Regex to find the start of an entry.
+        const entryRegex = /@([a-zA-Z]+)\s*\{\s*([^,\s\}]+)\s*,/g;
         let match;
 
-        while ((match = entryRegex.exec(clean)) !== null) {
+        while ((match = entryRegex.exec(content)) !== null) {
             const type = match[1].toLowerCase();
             const key = match[2].trim();
             const startIndex = match.index;
 
-            // Extract the full balanced block { ... }
-            const block = this.extractBalancedBlock(clean, startIndex);
+            // Extract the full balanced block directly from the raw content
+            let block = this.extractBalancedBlock(content, startIndex);
+
             if (block) {
+                // Apply deep cleaning ONLY to this localized block to remove comments and normalize line breaks, without affecting the rest of the content.
+                block = block.replace(/\r\n/g, '\n')
+                             .replace(/^\s*\/\/\s+.*/gm, '')
+                             .replace(/(?<!\\)%.*$/gm, '');
                 // Parse fields using the robust parser
                 const fields = this.parseFieldsRobust(block);
                 if (Object.keys(fields).length > 0) {

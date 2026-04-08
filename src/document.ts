@@ -204,10 +204,12 @@ export class LatexDocument {
                 const targetUri = this.fileProvider.resolve(currentDir, relPath);
 
                 const result = await this.loadAndFlatten(targetUri, filePool, depth + 1);
-
-                flattenedLines.push(...result.textLines);
-                outIndices.push(...result.fileIndices);
-                outLines.push(...result.lines);
+                const len = result.textLines.length;
+                for (let j = 0; j < len; j++) {
+                    flattenedLines.push(result.textLines[j]);
+                    outIndices.push(result.fileIndices[j]);
+                    outLines.push(result.lines[j]);
+                }
             } else {
                 flattenedLines.push(line);
                 outIndices.push(currentFileIndex);
