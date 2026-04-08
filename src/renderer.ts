@@ -197,18 +197,25 @@ export class SmartRenderer {
         const diff = DiffEngine.compute(this.lastBlockTexts, newBlockTexts);
 
         // 6. Citations
-        // Slice only locally when strictly needed for text joining
-        const insertedFullText = newBlockTexts.slice(diff.start, diff.start + diff.insertCount).join('\n');
-        const deletedFullText = this.lastBlockTexts.slice(diff.start, diff.start + diff.deleteCount).join('\n');
         const bibRegex = R_BIBLIOGRAPHY;
-        const bibChanged = bibRegex.test(insertedFullText) || bibRegex.test(deletedFullText);
+        let bibChanged = false;
+
+        for (let i = 0; i < diff.insertCount; i++) {
+            if (bibRegex.test(newBlockTexts[diff.start + i])) { bibChanged = true; break; }
+        }
+        if (!bibChanged) {
+            for (let i = 0; i < diff.deleteCount; i++) {
+                if (bibRegex.test(this.lastBlockTexts[diff.start + i])) { bibChanged = true; break; }
+            }
+        }
 
         let shouldFullScan = false;
         if (bibChanged || this.lastBlockTexts.length === 0) {
             shouldFullScan = true;
         } else {
-            const deletedKeys = this.extractKeysFromText(deletedFullText);
-            const insertedKeys = this.extractKeysFromText(insertedFullText);
+            const deletedKeys = this.extractKeysFromBlocks(this.lastBlockTexts, diff.start, diff.deleteCount);
+            const insertedKeys = this.extractKeysFromBlocks(newBlockTexts, diff.start, diff.insertCount);
+
             if (deletedKeys.size !== insertedKeys.size) {
                 shouldFullScan = true;
             } else {
@@ -316,18 +323,19 @@ export class SmartRenderer {
         });
     }
 
-    private extractKeysFromText(text: string): Set<string> {
+    private extractKeysFromBlocks(blocks: string[], start: number, count: number): Set<string> {
         const keys = new Set<string>();
-        R_CITATION.lastIndex = 0;
-        let match;
-        while ((match = R_CITATION.exec(text)) !== null) {
-            const keyParts = match[4].split(',');
-            keyParts.forEach(k => keys.add(k.trim()));
+        for (let i = 0; i < count; i++) {
+            const text = blocks[start + i];
+            R_CITATION.lastIndex = 0;
+            let match;
+            while ((match = R_CITATION.exec(text)) !== null) {
+                const keyParts = match[4].split(',');
+                keyParts.forEach(k => keys.add(k.trim()));
+            }
         }
         return keys;
     }
-
-    // [REMOVED] restoreRenderedMath, restoreRawBlocks
 
     public getPreviewSyncData(filePath: string, line: number) {
         if (!this.currentDocument) {return null;}

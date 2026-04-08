@@ -101,11 +101,14 @@ export class LatexDocument {
         if (rawDocMatch && rawDocMatch.index !== undefined) {
              const cleanDocMatch = metaRes.cleanedText.match(/\\begin\{document\}/i);
              if (cleanDocMatch && cleanDocMatch.index !== undefined) {
-                 bodyText = metaRes.cleanedText.substring(cleanDocMatch.index + cleanDocMatch[0].length)
-                     .replace(/\\end\{document\}[\s\S]*/i, '');
+                 const startIndex = cleanDocMatch.index + cleanDocMatch[0].length;
+                 let endIndex = metaRes.cleanedText.search(/\\end\{document\}/i);
+                 if (endIndex === -1) {
+                     endIndex = metaRes.cleanedText.length;
+                 }
+                 bodyText = metaRes.cleanedText.substring(startIndex, endIndex);
              }
         }
-
         const rawBlockObjects = LatexBlockSplitter.split(bodyText);
 
         const res: DocumentParseResult = {
@@ -123,8 +126,8 @@ export class LatexDocument {
 
         for (const b of rawBlockObjects) {
             if (b.text.trim().length > 0) {
-                // const flattenedText = (' ' + b.text).slice(1);
-                res.blockTexts.push(b.text);
+                const flattenedText = (' ' + b.text).slice(1);
+                res.blockTexts.push(flattenedText);
                 res.blockLines.push(b.line);
                 res.blockLineCounts.push(b.lineCount);
             }
