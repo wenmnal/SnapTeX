@@ -2,10 +2,7 @@
 
 All notable changes to the "SnapTeX" extension will be documented in this file.
 
-## Under dev
-
-
-## [0.5.12] - 2026-03-31
+## [0.5.12] - 2026-04-29
 
 - **Fixed**: Match {figure*} and {algorithm*}
 - **Optim**: Memory efficient flatten lines in multiple docs
