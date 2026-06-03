@@ -1,7 +1,7 @@
 # SnapTeX Optimization TODO
 
 > Current branch: `dev`  
-> Last verified: `npm test` passed with 28 tests after the URI-only PDF transport cleanup.  
+> Last verified: `npm test` passed with 29 tests after the viewport-near PDF lazy-load trigger fix.  
 > Rule for future work: keep each change block small, add or update tests before behavior changes, then run `npm test` and commit only the files for that block.
 
 ## Overall Goal
@@ -191,6 +191,7 @@
 - [x] Use PDF.js `getDocument({ url })` when a URI is available.
 - [x] Lazy-render PDF canvases with `IntersectionObserver`.
 - [x] Add a test guard that prevents the removed `pdfData`/base64 transport branch from returning silently.
+- [x] Request viewport-near PDF canvases immediately instead of waiting for an observer scroll event.
 - [ ] Release far-offscreen PDF canvas bitmaps.
 - [ ] Add webview-side tests or smoke coverage that verifies URI PDF rendering in local, remote, and web extension hosts where practical.
 

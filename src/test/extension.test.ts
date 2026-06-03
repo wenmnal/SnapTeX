@@ -482,6 +482,15 @@ suite('PDF request validation', () => {
         assert.doesNotMatch(webviewSource, /\bbase64\b/i);
         assert.doesNotMatch(webviewSource, /\btransport\b/);
     });
+
+    test('requests viewport-near PDF canvases without waiting for observer scroll events', () => {
+        const repoRoot = path.resolve(__dirname, '..', '..');
+        const webviewSource = fs.readFileSync(path.join(repoRoot, 'media', 'webview.html'), 'utf8');
+
+        assert.match(webviewSource, /isPdfCanvasNearViewport\(canvas\)/);
+        assert.match(webviewSource, /this\.requestPdfCanvas\(canvas\);\s*return;/);
+        assert.match(webviewSource, /schedulePendingPdfRender\(\)/);
+    });
 });
 
 suite('Metadata extraction', () => {

@@ -477,6 +477,7 @@
                 debugMemory: false
             };
             this.pdfObserver = null;
+            this.pdfRenderTimer = null;
 
             // Initialize Tooltip Manager
             this.tooltipManager = new TooltipManager();
@@ -564,10 +565,7 @@
             if (payload.numbering) {
                 requestAnimationFrame(() => this.applyNumbering(payload.numbering));
             }
-            setTimeout(() => {
-                this.renderPendingPdfs();
-                this.logDomStats('after renderPendingPdfs');
-            }, 50);
+            this.schedulePendingPdfRender();
 
             // Trigger TikZ Rendering after update
             this.triggerTikzRendering();
@@ -612,6 +610,7 @@
             this.isFirstLoad = false;
             if (!scrollHandled && this.state === 'SCROLLING_AUTO') { this.lockScrolling(200); }
             else if (!scrollHandled) { this.setState('IDLE'); }
+            this.schedulePendingPdfRender();
         }
 
         handleScrollCommand(data) {
@@ -828,10 +827,38 @@
             }
         }
 
+        isPdfCanvasNearViewport(canvas) {
+            const rect = canvas.getBoundingClientRect();
+            const margin = 1200;
+            return rect.bottom >= -margin && rect.top <= window.innerHeight + margin;
+        }
+
+        schedulePendingPdfRender() {
+            if (this.pdfRenderTimer) clearTimeout(this.pdfRenderTimer);
+
+            const run = () => {
+                this.renderPendingPdfs();
+                this.logDomStats('after renderPendingPdfs');
+            };
+
+            requestAnimationFrame(() => {
+                requestAnimationFrame(run);
+            });
+
+            this.pdfRenderTimer = setTimeout(() => {
+                this.pdfRenderTimer = null;
+                run();
+            }, 250);
+        }
+
         renderPendingPdfs() {
             const pdfCanvases = document.querySelectorAll('canvas[data-req-path]');
             pdfCanvases.forEach(canvas => {
                 if (canvas.getAttribute('data-rendered') || canvas.getAttribute('data-requested')) return;
+                if (this.isPdfCanvasNearViewport(canvas)) {
+                    this.requestPdfCanvas(canvas);
+                    return;
+                }
                 if (this.pdfObserver) {
                     if (!canvas.getAttribute('data-pdf-observed')) {
                         canvas.setAttribute('data-pdf-observed', 'true');
