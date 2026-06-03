@@ -513,6 +513,19 @@ suite('PDF request validation', () => {
     });
 });
 
+suite('Webview resource loading', () => {
+    test('lazy-loads TikZJax only when TikZ scripts are present', () => {
+        const repoRoot = path.resolve(__dirname, '..', '..');
+        const webviewSource = fs.readFileSync(path.join(repoRoot, 'media', 'webview.html'), 'utf8');
+
+        assert.doesNotMatch(webviewSource, /<script src="\{\{tikzJaxJsUri\}\}" id="tikzjax-script" defer><\/script>/);
+        assert.match(webviewSource, /window\.tikzJaxJsUri = '\{\{tikzJaxJsUri\}\}'/);
+        assert.match(webviewSource, /window\.ensureTikzJaxLoaded = function\(\)/);
+        assert.match(webviewSource, /script\.src = window\.tikzJaxJsUri/);
+        assert.match(webviewSource, /querySelector\('script\[type="text\/tikz"\]'\)/);
+    });
+});
+
 suite('Metadata extraction', () => {
     test('extracts metadata, macros, TikZ globals, and TikZ macros', () => {
         const result = extractMetadata([

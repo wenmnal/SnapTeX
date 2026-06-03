@@ -16,7 +16,6 @@
     <link rel="stylesheet" href="{{styleUri}}">
 
     <link rel="stylesheet" href="{{tikzJaxCssUri}}">
-    <script src="{{tikzJaxJsUri}}" id="tikzjax-script" defer></script>
 
     <title>SnapTeX Preview</title>
 </head>
@@ -26,6 +25,45 @@
 
 <script>
     const vscode = acquireVsCodeApi();
+    window.tikzJaxJsUri = '{{tikzJaxJsUri}}';
+    window.tikzJaxLoadPromise = null;
+    window.tikzJaxFailed = false;
+
+    window.ensureTikzJaxLoaded = function() {
+        if (window.TikzJax) {
+            return Promise.resolve();
+        }
+        if (window.tikzJaxFailed) {
+            return Promise.reject(new Error('TikZJax is disabled after a previous load failure.'));
+        }
+        if (window.tikzJaxLoadPromise) {
+            return window.tikzJaxLoadPromise;
+        }
+
+        window.tikzJaxLoadPromise = new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = window.tikzJaxJsUri;
+            script.id = 'tikzjax-script';
+            script.defer = true;
+            script.onload = () => resolve();
+            script.onerror = () => {
+                window.tikzJaxFailed = true;
+                window.tikzJaxLoadPromise = null;
+                reject(new Error('Failed to load TikZJax.'));
+            };
+            document.head.appendChild(script);
+        });
+
+        return window.tikzJaxLoadPromise;
+    };
+
+    window.addEventListener('unhandledrejection', event => {
+        const message = String(event.reason?.message || event.reason || '');
+        if (message.includes('Did not receive an init message') || message.includes('run-tex.js')) {
+            window.tikzJaxFailed = true;
+            console.warn('[SnapTeX] TikZJax worker failed; disabling TikZ rendering for this webview session.', event.reason);
+        }
+    });
 
     // --- Global PDF Helper ---
     window.pdfReqQueue = [];
@@ -420,7 +458,9 @@
 
         triggerTikzRendering() {
             if (this.contentContainer.querySelector('script[type="text/tikz"]')) {
-                 window.dispatchEvent(new Event('load'));
+                 window.ensureTikzJaxLoaded().catch(error => {
+                     console.warn('[SnapTeX] Failed to load TikZJax for tooltip content.', error);
+                 });
             }
         }
 
@@ -587,10 +627,11 @@
         triggerTikzRendering() {
             setTimeout(() => {
                 const unrendered = document.querySelector('script[type="text/tikz"]');
-                if (unrendered) {
-                    console.log('[SnapTeX] Triggering TikZ re-render...');
-                    // Dispatch 'load' event to force TikZJax scan
-                    window.dispatchEvent(new Event('load'));
+                if (unrendered && !window.tikzJaxFailed) {
+                    console.log('[SnapTeX] Loading TikZJax for TikZ content...');
+                    window.ensureTikzJaxLoaded().catch(error => {
+                        console.warn('[SnapTeX] Failed to load TikZJax for preview content.', error);
+                    });
                 }
             }, 100);
         }
