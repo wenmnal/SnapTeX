@@ -180,8 +180,8 @@
   - Always render the latest pending update.
 - [x] Add `snaptex.retainContextWhenHidden`, default `false`.
 - [x] Avoid extra `cleanedHtmls` array in full update while the old full-string model still exists.
-- [x] Reduce full-update frequency.
-  - Use proportion thresholds instead of fixed `> 50`.
+- [ ] Reduce full-update frequency.
+  - Keep current fixed `> 50` behavior until this is explicitly revisited.
   - Keep full update for macro/metadata-sensitive changes.
 
 ### D. PDF Pipeline Optimization
