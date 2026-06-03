@@ -6,6 +6,34 @@ const zlib = require("zlib");
 const production = process.argv.includes('--production');
 const watch = process.argv.includes('--watch');
 
+function patchTikzJaxWorkerBootstrap(tikzDest) {
+    const tikzJaxFile = path.join(tikzDest, 'tikzjax.js');
+    const originalBootstrap = 'const e=N.href.replace(/\\/tikzjax\\.js(?:\\?.*)?$/,""),r=await t(new o(`${e}/run-tex.js`));';
+    const patchedBootstrap = 'const e=N.href.replace(/\\/tikzjax\\.js(?:\\?.*)?$/,"");let r,s;try{const i=await fetch(`${e}/run-tex.js`);if(!i.ok)throw new Error(`Failed to load run-tex.js: ${i.status}`);s=URL.createObjectURL(new Blob([await i.text()],{type:"text/javascript"})),r=await t(new o(s,{CORSWorkaround:!1}),{timeout:60000})}catch(e){throw s&&URL.revokeObjectURL(s),e}r.__snaptexRunTexBlobUrl=s;';
+    const originalTerminate = 'Z=async()=>{H&&H.disconnect(),await n.terminate(await V)};';
+    const patchedTerminate = 'Z=async()=>{H&&H.disconnect();const e=await V;await n.terminate(e),e.__snaptexRunTexBlobUrl&&URL.revokeObjectURL(e.__snaptexRunTexBlobUrl)};';
+
+    if (!fs.existsSync(tikzJaxFile)) {
+        return;
+    }
+
+    let source = fs.readFileSync(tikzJaxFile, 'utf8');
+    if (source.includes(patchedBootstrap) && source.includes(patchedTerminate)) {
+        return;
+    }
+
+    if (!source.includes(originalBootstrap) || !source.includes(originalTerminate)) {
+        console.warn('[build] Warning: TikZJax worker bootstrap patch target not found.');
+        return;
+    }
+
+    source = source
+        .replace(originalBootstrap, patchedBootstrap)
+        .replace(originalTerminate, patchedTerminate);
+    fs.writeFileSync(tikzJaxFile, source);
+    console.log('[build] Patched TikZJax worker bootstrap.');
+}
+
 /**
  * Custom plugin to automatically copy assets (KaTeX, PDF.js, TikZJax) from node_modules to the media directory.
  * This ensures that necessary static files are available for the Webview at runtime.
@@ -145,6 +173,7 @@ const copyAssetsPlugin = {
                     console.warn(`[build] Warning: TikZJax file not found: ${fileName} in ${tikzRoot}`);
                 }
             });
+            patchTikzJaxWorkerBootstrap(tikzDest);
 
             // Copy tex_files
             const texFilesSrc = path.join(tikzRoot, 'dist', 'tex_files');

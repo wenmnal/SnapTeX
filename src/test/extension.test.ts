@@ -567,6 +567,19 @@ suite('Webview resource loading', () => {
         assert.match(webviewSource, /setTikzContainerState\(container, 'rendering'\)/);
         assert.doesNotMatch(webviewSource, /setTimeout\(\(\) => \{[\s\S]*window\.failPendingTikzContainers\('TikZ rendering timed out\.'\)/);
     });
+
+    test('bootstraps TikZJax run-tex worker from a blob URL in VS Code webviews', () => {
+        const repoRoot = path.resolve(__dirname, '..', '..');
+        const buildSource = fs.readFileSync(path.join(repoRoot, 'esbuild.js'), 'utf8');
+        const tikzJaxSource = fs.readFileSync(path.join(repoRoot, 'media', 'vendor', 'tikzjax', 'tikzjax.js'), 'utf8');
+
+        assert.match(buildSource, /patchTikzJaxWorkerBootstrap/);
+        assert.match(buildSource, /CORSWorkaround:!1/);
+        assert.match(tikzJaxSource, /fetch\(`\$\{e\}\/run-tex\.js`\)/);
+        assert.match(tikzJaxSource, /URL\.createObjectURL\(new Blob/);
+        assert.match(tikzJaxSource, /new o\([^,]+,\{CORSWorkaround:!1\}\)/);
+        assert.doesNotMatch(tikzJaxSource, /new o\(`\$\{e\}\/run-tex\.js`\)/);
+    });
 });
 
 suite('Metadata extraction', () => {
