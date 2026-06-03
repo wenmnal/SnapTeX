@@ -6,11 +6,13 @@ import { BibTexParser } from '../bib';
 import { LatexDocument } from '../document';
 import { DiffEngine } from '../diff';
 import { IFileProvider } from '../file-provider';
+import { extractMetadata } from '../metadata';
 import { isUriWithinAllowedRoots, normalizePdfRequestPath } from '../panel';
+import { ProtectionManager } from '../protection';
 import { LatexCounterScanner } from '../scanner';
 import { LatexBlockSplitter } from '../splitter';
 import { SmartRenderer } from '../renderer';
-import { normalizeUri, resolveLatexStyles } from '../utils';
+import { cleanLatexCommands, extractAndHideLabels, findCommand, normalizeUri, resolveLatexStyles } from '../utils';
 
 class MemoryFileProvider implements IFileProvider {
     constructor(private readonly files: Map<string, string> = new Map()) {}
@@ -44,15 +46,26 @@ class MemoryFileProvider implements IFileProvider {
     }
 }
 
-function createDocument(blockTexts: string[]): LatexDocument {
+function createDocument(
+    blockTexts: string[],
+    options: {
+        macros?: Record<string, string>;
+        title?: string;
+        author?: string;
+        date?: string;
+    } = {}
+): LatexDocument {
     const doc = new LatexDocument(new MemoryFileProvider());
     doc.blockTexts = blockTexts;
     doc.blockLines = blockTexts.map((_, index) => index * 3);
     doc.blockLineCounts = blockTexts.map(text => text.split(/\r?\n/).length);
     doc.metadata = {
-        macros: {},
+        macros: options.macros ?? {},
         tikzGlobal: '',
-        tikzMacroMap: new Map()
+        tikzMacroMap: new Map(),
+        title: options.title,
+        author: options.author,
+        date: options.date
     };
     doc.bibEntries = new Map();
     doc.contentStartLineOffset = 0;
@@ -117,6 +130,29 @@ suite('LatexBlockSplitter', () => {
         assert.match(blocks[0].text, /\\node \{A\};/);
         assert.match(blocks[0].text, /\\end\{tikzpicture\}/);
     });
+
+    test('splits before major environments but keeps starred floats intact', () => {
+        const text = [
+            'Before figure.',
+            '',
+            '\\begin{figure*}',
+            '\\caption{Wide}',
+            '',
+            '\\includegraphics{wide.pdf}',
+            '\\end{figure*}',
+            '',
+            'After figure.'
+        ].join('\n');
+
+        const blocks = LatexBlockSplitter.split(text);
+
+        assert.equal(blocks.length, 3);
+        assert.equal(blocks[0].text.trim(), 'Before figure.');
+        assert.match(blocks[1].text, /\\begin\{figure\*\}/);
+        assert.match(blocks[1].text, /\\includegraphics\{wide\.pdf\}/);
+        assert.match(blocks[1].text, /\\end\{figure\*\}/);
+        assert.equal(blocks[2].text.trim(), 'After figure.');
+    });
 });
 
 suite('LatexCounterScanner', () => {
@@ -139,6 +175,25 @@ suite('LatexCounterScanner', () => {
         assert.equal(result.labelMap['tbl:t'], '1');
         assert.equal(result.labelMap['alg:a'], '1');
     });
+
+    test('numbers sections and skips starred equations', () => {
+        const blocks = [
+            '\\section{Intro}\\label{sec:intro}',
+            '\\subsection{Setup}',
+            '\\begin{equation}x=1\\label {eq:x}\\end{equation}',
+            '\\begin{equation*}y=1\\label{eq:y}\\end{equation*}'
+        ];
+
+        const result = new LatexCounterScanner().scan(blocks);
+
+        assert.deepStrictEqual(result.blockNumbering[0].counts.sec, ['1']);
+        assert.deepStrictEqual(result.blockNumbering[1].counts.sec, ['1.1']);
+        assert.deepStrictEqual(result.blockNumbering[2].counts.eq, ['1']);
+        assert.deepStrictEqual(result.blockNumbering[3].counts.eq, []);
+        assert.equal(result.labelMap['sec:intro'], '1');
+        assert.equal(result.labelMap['eq:x'], '1');
+        assert.equal(result.labelMap['eq:y'], undefined);
+    });
 });
 
 suite('BibTexParser', () => {
@@ -160,6 +215,20 @@ suite('BibTexParser', () => {
         assert.equal(entry.fields.journal, 'Journal of Tests');
         assert.equal(entry.fields.year, '2024');
     });
+
+    test('formats authors with accents and multiple BibTeX name forms', () => {
+        const entries = BibTexParser.parse(`
+            @article{accented,
+              author = {M\\"uller, Ada and John Smith and Jane Doe},
+              title = {Title},
+              year = {2024}
+            }
+        `);
+
+        const entry = entries.get('accented');
+        assert.ok(entry);
+        assert.equal(BibTexParser.getShortAuthor(entry), 'Muller <em>et al.</em>');
+    });
 });
 
 suite('LaTeX style utilities', () => {
@@ -170,6 +239,29 @@ suite('LaTeX style utilities', () => {
         assert.match(html, /<em>I<\/em>/);
         assert.match(html, /<code>T<\/code>/);
         assert.match(html, /<u>U<\/u>/);
+    });
+
+    test('finds nested command content and hides labels with optional whitespace', () => {
+        const command = findCommand('\\caption[Short]{A {Nested} Caption}', 'caption');
+        assert.ok(command);
+        assert.equal(command.content, 'A {Nested} Caption');
+
+        const labels = extractAndHideLabels('Figure body \\label {fig:spaced} text \\label{fig:tight}');
+        assert.equal(labels.cleanContent, 'Figure body  text ');
+        assert.match(labels.hiddenHtml, /id="fig:spaced"/);
+        assert.match(labels.hiddenHtml, /id="fig:tight"/);
+    });
+
+    test('cleans common BibTeX LaTeX commands without stripping protected tokens', () => {
+        const protector = new ProtectionManager();
+        const token = protector.protect('math', '<span>math</span>');
+        const cleaned = cleanLatexCommands(`M\\"uller \\textbf{Bold} ${token}`, {
+            protect: (namespace: string, content: string) => protector.protect(namespace, content)
+        });
+
+        assert.match(cleaned, /M.ller/);
+        assert.match(cleaned, /<b>Bold<\/b>/);
+        assert.match(protector.resolve(cleaned), /<span>math<\/span>/);
     });
 });
 
@@ -202,6 +294,28 @@ suite('LatexDocument source mapping', () => {
         assert.ok(original);
         assert.equal(normalizeUri(original.file), normalizeUri(sectionUri));
         assert.equal(original.line, 0);
+    });
+
+    test('loads bibliography entries relative to the root document', async () => {
+        const mainUri = vscode.Uri.file('/project/main.tex');
+        const bibUri = vscode.Uri.file('/project/refs.bib');
+        const provider = new MemoryFileProvider(new Map([
+            [normalizeUri(mainUri), [
+                '\\begin{document}',
+                'See \\cite{smith2024}.',
+                '\\bibliography{refs}',
+                '\\end{document}'
+            ].join('\n')],
+            [normalizeUri(bibUri), '@article{smith2024, title={Paper}, author={Smith, Jane}, year={2024}}']
+        ]));
+        const doc = new LatexDocument(provider);
+
+        const result = await doc.parse(mainUri);
+
+        assert.ok(result.bibEntries.has('smith2024'));
+        assert.equal(result.bibEntries.get('smith2024')?.fields.title, 'Paper');
+        assert.equal(result.contentStartLineOffset, 0);
+        assert.equal(result.blockTexts.length, 1);
     });
 });
 
@@ -262,6 +376,47 @@ suite('SmartRenderer', () => {
         assert.ok(payload.htmls?.[0].includes('xAB'));
         assert.ok(!payload.htmls?.[0].includes('xBA'));
     });
+
+    test('returns patch payloads for small localized edits', () => {
+        const renderer = new SmartRenderer(new MemoryFileProvider());
+        renderer.render(createDocument(['A', 'B', 'C']));
+
+        const payload = renderer.render(createDocument(['A', 'B changed', 'C']));
+
+        assert.equal(payload.type, 'patch');
+        assert.equal(payload.start, 1);
+        assert.equal(payload.deleteCount, 1);
+        assert.equal(payload.htmls?.length, 1);
+        assert.match(payload.htmls?.[0] ?? '', /B changed/);
+    });
+
+    test('forces a full render when macros change', () => {
+        const renderer = new SmartRenderer(new MemoryFileProvider());
+        renderer.render(createDocument(['$\\foo$'], { macros: { '\\foo': 'x' } }));
+
+        const payload = renderer.render(createDocument(['$\\foo$'], { macros: { '\\foo': 'y' } }));
+
+        assert.equal(payload.type, 'full');
+        assert.equal(payload.htmls?.length, 1);
+    });
+
+    test('renders figure pdf placeholders and resolves references after numbering', () => {
+        const html = renderBlocks([
+            '\\section{Intro}\\label{sec:intro} See Section~\\ref{sec:intro}.',
+            [
+                '\\begin{figure}',
+                '\\caption{PDF figure}',
+                '\\includegraphics{figures/result.pdf}',
+                '\\label{fig:result}',
+                '\\end{figure}'
+            ].join('\n')
+        ]);
+
+        assert.match(html, /class="latex-figure"/);
+        assert.match(html, /data-req-path="figures\/result\.pdf"/);
+        assert.match(html, /data-key="sec:intro"/);
+        assert.equal(html.match(/class="latex-block/g)?.length ?? 0, 2);
+    });
 });
 
 suite('PDF request validation', () => {
@@ -287,5 +442,71 @@ suite('PDF request validation', () => {
         assert.equal(isUriWithinAllowedRoots(vscode.Uri.file('/project/chapter/figures/a.pdf'), [docDir, root]), true);
         assert.equal(isUriWithinAllowedRoots(vscode.Uri.file('/project2/a.pdf'), [root]), false);
         assert.equal(isUriWithinAllowedRoots(vscode.Uri.parse('https://example.com/a.pdf'), [root]), false);
+    });
+});
+
+suite('Metadata extraction', () => {
+    test('extracts metadata, macros, TikZ globals, and TikZ macros', () => {
+        const result = extractMetadata([
+            '\\title{A \\\\ Title}',
+            '\\author{Ada}',
+            '\\date{\\today}',
+            '\\newcommand{\\vect}[1]{\\mathbf{#1}}',
+            '\\DeclareMathOperator{\\rank}{rank}',
+            '\\usetikzlibrary{arrows.meta}',
+            '\\tikzset{box/.style={draw}}',
+            '\\newcommand{\\origin}{(0,0)}',
+            '\\begin{document}',
+            '\\maketitle',
+            '$\\vect{x}$',
+            '\\begin{tikzpicture}\\draw \\origin -- (1,1);\\end{tikzpicture}',
+            '\\end{document}'
+        ].join('\n'));
+
+        assert.equal(result.data.title, 'A <br/> Title');
+        assert.equal(result.data.author, 'Ada');
+        assert.ok(result.data.date);
+        assert.equal(result.data.macros['\\vect'], '\\mathbf{#1}');
+        assert.equal(result.data.macros['\\rank'], '\\operatorname{rank}');
+        assert.match(result.data.tikzGlobal, /\\usetikzlibrary\{arrows\.meta\}/);
+        assert.match(result.data.tikzGlobal, /\\tikzset\{box\/.style=\{draw\}\}/);
+        assert.equal(result.data.tikzMacroMap.get('\\origin'), '\\def\\origin{(0,0)}');
+        assert.doesNotMatch(result.cleanedText, /\\title/);
+        assert.doesNotMatch(result.cleanedText, /\\author/);
+    });
+});
+
+suite('ProtectionManager', () => {
+    test('resolves bare, paragraph-wrapped, and nested tokens', () => {
+        const protector = new ProtectionManager();
+        const inner = protector.protect('inner', '<span>inner</span>');
+        const outer = protector.protect('outer', `<div>${inner}</div>`);
+
+        assert.equal(protector.resolve(`<p>${outer}</p>`), '<div><span>inner</span></div>');
+    });
+
+    test('reset clears old tokens and restarts ids', () => {
+        const protector = new ProtectionManager();
+        const token = protector.protect('x', '<b>x</b>');
+        protector.reset();
+
+        assert.equal(protector.resolve(token), token);
+        assert.equal(protector.protect('x', '<b>new</b>'), 'XSNAP:x:0Y');
+    });
+});
+
+suite('URI normalization', () => {
+    test('lowercases Windows file uris for stable comparisons', () => {
+        const uri = vscode.Uri.file('C:/Project/Section.tex');
+        assert.equal(normalizeUri(uri), '/c:/project/section.tex');
+    });
+
+    test('preserves case for remote uris', () => {
+        const uri = vscode.Uri.parse('vscode-remote://ssh-remote+Host/home/User/Section.tex');
+        assert.equal(normalizeUri(uri), 'vscode-remote://ssh-remote+host/home/User/Section.tex');
+        assert.equal(
+            normalizeUri('vscode-remote://ssh-remote+Host/home/User/Section.tex'),
+            'vscode-remote://ssh-remote+Host/home/User/Section.tex'
+        );
     });
 });
