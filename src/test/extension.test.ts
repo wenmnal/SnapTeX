@@ -491,6 +491,15 @@ suite('PDF request validation', () => {
         assert.match(webviewSource, /this\.requestPdfCanvas\(canvas\);\s*return;/);
         assert.match(webviewSource, /schedulePendingPdfRender\(\)/);
     });
+
+    test('uses non-streaming PDF.js URL loading for webview resource URIs', () => {
+        const repoRoot = path.resolve(__dirname, '..', '..');
+        const webviewSource = fs.readFileSync(path.join(repoRoot, 'media', 'webview.html'), 'utf8');
+
+        assert.match(webviewSource, /disableRange:\s*true/);
+        assert.match(webviewSource, /disableStream:\s*true/);
+        assert.match(webviewSource, /disableAutoFetch:\s*true/);
+    });
 });
 
 suite('Metadata extraction', () => {

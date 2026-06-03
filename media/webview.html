@@ -990,7 +990,12 @@
         if (!canvas) return;
 
         try {
-            await renderPdfDocument(canvas, pdfjsLib.getDocument({ url: pdfUri }));
+            await renderPdfDocument(canvas, pdfjsLib.getDocument({
+                url: pdfUri,
+                disableRange: true,
+                disableStream: true,
+                disableAutoFetch: true
+            }));
         } catch (error) {
             console.error('PDF URI render error:', error);
             canvas.removeAttribute('data-requested');
