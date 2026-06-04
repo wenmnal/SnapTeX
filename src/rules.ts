@@ -93,6 +93,94 @@ function resolveDependencies(content: string, macroMap: Map<string, string>): st
     return resolvedDefs.join('\n');
 }
 
+const TIKZ_LIBRARY_PATTERNS: Record<string, RegExp[]> = {
+    calc: [
+        /\$\s*\([^]*?\)\s*\$/m,
+        /!\s*[-+]?\d*\.?\d+\s*!/,
+        /\bintersection of\b/i
+    ],
+    'shapes.geometric': [
+        /\b(?:shape\s*=\s*)?(?:diamond|ellipse|trapezium|semicircle|regular polygon|star|dart|kite|cylinder|isosceles triangle)\b/i
+    ],
+    positioning: [
+        /\b(?:above|below|left|right|above left|above right|below left|below right|base left|base right)\s*=\s*(?:of\b|[^,\]]*\bof\b)/i,
+        /\bnode distance\b/i
+    ],
+    'decorations.pathreplacing': [
+        /\bdecorate\b/i,
+        /\bdecoration\s*=\s*\{?[^,\]}]*(?:brace|expanding waves|ticks|border|coil|zigzag)/i
+    ],
+    patterns: [
+        /\bpattern\s*=/i,
+        /\bpattern color\s*=/i
+    ],
+    'arrows.meta': [
+        /\b(?:Stealth|Latex|Triangle|Circle|Square|Bar|Bracket|Hooks?|Implies|Computer Modern|Classical TikZ)\b/,
+        /[-<>]\s*\{[^}]*\}/
+    ],
+    backgrounds: [
+        /\bon background layer\b/i,
+        /\\begin\{pgfonlayer\}\{background\}/i,
+        /\bbackground rectangle\b/i,
+        /\bshow background\b/i
+    ],
+    angles: [
+        /\bpic\s*(?:\[[^\]]*\])?\s*\{(?:right\s+)?angle\s*=/i,
+        /\bangle\s*=/i
+    ],
+    fit: [
+        /\bfit\s*=/i
+    ],
+    matrix: [
+        /\\matrix\b/i,
+        /\bmatrix of\b/i
+    ],
+    quotes: [
+        /\b(?:edge|node)\s*\[[^\]]*["']/i
+    ]
+};
+
+function splitTikzLibraries(libraries: string): string[] {
+    return libraries
+        .split(',')
+        .map(library => library.trim())
+        .filter(Boolean);
+}
+
+function shouldIncludeTikzLibrary(library: string, signalText: string): boolean {
+    const patterns = TIKZ_LIBRARY_PATTERNS[library];
+    if (!patterns) { return true; }
+    return patterns.some(pattern => pattern.test(signalText));
+}
+
+function filterTikzGlobalForPicture(globalPreamble: string, pictureSource: string): string {
+    const libraryRegex = /\\usetikzlibrary\s*\{([^{}]*)\}/g;
+    const requestedLibraries: string[] = [];
+    const retainedGlobals: string[] = [];
+    let lastIndex = 0;
+    let match;
+
+    while ((match = libraryRegex.exec(globalPreamble)) !== null) {
+        const before = globalPreamble.substring(lastIndex, match.index).trim();
+        if (before) { retainedGlobals.push(before); }
+        requestedLibraries.push(...splitTikzLibraries(match[1]));
+        lastIndex = libraryRegex.lastIndex;
+    }
+
+    const after = globalPreamble.substring(lastIndex).trim();
+    if (after) { retainedGlobals.push(after); }
+
+    const signalText = `${pictureSource}\n${retainedGlobals.join('\n')}`;
+    const selectedLibraries = Array.from(new Set(
+        requestedLibraries.filter(library => shouldIncludeTikzLibrary(library, signalText))
+    ));
+    const selectedLibraryPreamble = selectedLibraries.length > 0
+        ? [`\\usetikzlibrary{${selectedLibraries.join(', ')}}`]
+        : [];
+
+    return [...selectedLibraryPreamble, ...retainedGlobals].join('\n');
+}
+
 export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
     // Removes the % marker left by metadata.ts and consumes the following newline.
     // This mimics LaTeX behavior: "Word%\nNext" -> "WordNext" (joined).
@@ -117,7 +205,10 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 const opts = options ? `[${options}]` : '';
 
                 // 1. Get Always-Include Globals (Libraries, Colors, TikzSets)
-                const globalPreamble = renderer.currentDocument?.metadata.tikzGlobal || "";
+                const globalPreamble = filterTikzGlobalForPicture(
+                    renderer.currentDocument?.metadata.tikzGlobal || "",
+                    `${opts}\n${cleanContent}`
+                );
 
                 // 2. Resolve Macros On-Demand (Tree Shaking)
                 const macroMap = renderer.currentDocument?.metadata.tikzMacroMap || new Map();
@@ -137,7 +228,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 ].join('\n');
 
                 const html = `<div class="tikz-container">
-                    <script type="text/tikz" data-show-console="false">
+                    <script type="text/snaptex-tikz" data-show-console="false">
                         ${fullCode}
                     </script>
                 </div>`;

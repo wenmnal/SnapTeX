@@ -52,6 +52,7 @@ function createDocument(
     blockTexts: string[],
     options: {
         macros?: Record<string, string>;
+        tikzGlobal?: string;
         title?: string;
         author?: string;
         date?: string;
@@ -63,7 +64,7 @@ function createDocument(
     doc.blockLineCounts = blockTexts.map(text => text.split(/\r?\n/).length);
     doc.metadata = {
         macros: options.macros ?? {},
-        tikzGlobal: '',
+        tikzGlobal: options.tikzGlobal ?? '',
         tikzMacroMap: new Map(),
         title: options.title,
         author: options.author,
@@ -461,8 +462,39 @@ suite('SmartRenderer', () => {
         ]);
 
         assert.match(html, /class="tikz-container"/);
-        assert.match(html, /<script type="text\/tikz"/);
+        assert.match(html, /<script type="text\/snaptex-tikz"/);
         assert.doesNotMatch(html, /\\resizebox/);
+    });
+
+    test('injects only TikZ libraries used by each picture', () => {
+        const renderer = new SmartRenderer(new MemoryFileProvider());
+        const doc = createDocument([
+            [
+                '\\begin{tikzpicture}',
+                '\\path coordinate (A) at (0, 0) coordinate (E) at (15, 0);',
+                '\\path coordinate (B) at ($ (A)!.5!(E) $);',
+                '\\draw (A) -- (B);',
+                '\\node[dot] at (B) {};',
+                '\\end{tikzpicture}'
+            ].join('\n')
+        ], {
+            tikzGlobal: [
+                '\\usetikzlibrary{calc, shapes.geometric, positioning, decorations.pathreplacing, patterns, arrows.meta, backgrounds, angles}',
+                '\\definecolor{brand}{RGB}{1,2,3}',
+                '\\tikzset{dot/.style={circle,fill}}'
+            ].join('\n')
+        });
+        const payload = renderer.render(doc);
+        const html = payload.htmls?.join('') ?? '';
+
+        assert.match(html, /\\usetikzlibrary\{calc\}/);
+        assert.match(html, /\\definecolor\{brand\}/);
+        assert.match(html, /\\tikzset\{dot\/\.style/);
+        assert.doesNotMatch(html, /arrows\.meta/);
+        assert.doesNotMatch(html, /backgrounds/);
+        assert.doesNotMatch(html, /decorations\.pathreplacing/);
+        assert.doesNotMatch(html, /patterns/);
+        assert.doesNotMatch(html, /shapes\.geometric/);
     });
 });
 
@@ -543,7 +575,9 @@ suite('Webview resource loading', () => {
         assert.match(webviewSource, /window\.tikzJaxJsUri = '\{\{tikzJaxJsUri\}\}'/);
         assert.match(webviewSource, /window\.ensureTikzJaxLoaded = function\(\)/);
         assert.match(webviewSource, /script\.src = window\.tikzJaxJsUri/);
-        assert.match(webviewSource, /querySelector\('script\[type="text\/tikz"\]'\)/);
+        assert.match(webviewSource, /TIKZ_PENDING_SCRIPT_TYPE = 'text\/snaptex-tikz'/);
+        assert.match(webviewSource, /window\.activatePendingTikzScripts = function/);
+        assert.match(webviewSource, /querySelector\(TIKZ_SCRIPT_SELECTOR\)/);
     });
 
     test('marks stuck TikZ renders as failed instead of leaving permanent loaders', () => {
@@ -568,6 +602,17 @@ suite('Webview resource loading', () => {
         assert.doesNotMatch(webviewSource, /setTimeout\(\(\) => \{[\s\S]*window\.failPendingTikzContainers\('TikZ rendering timed out\.'\)/);
     });
 
+    test('debounces TikZ activation so intermediate edits do not enter the TikZJax queue', () => {
+        const repoRoot = path.resolve(__dirname, '..', '..');
+        const webviewSource = fs.readFileSync(path.join(repoRoot, 'media', 'webview.html'), 'utf8');
+
+        assert.match(webviewSource, /const TIKZ_RENDER_DEBOUNCE_MS = 1500/);
+        assert.match(webviewSource, /this\.tikzRenderTimer = null/);
+        assert.match(webviewSource, /clearTimeout\(this\.tikzRenderTimer\)/);
+        assert.match(webviewSource, /window\.activatePendingTikzScripts\(document\)/);
+        assert.match(webviewSource, /script\.replaceWith\(activeScript\)/);
+    });
+
     test('bootstraps dynamic TikZJax with a self-contained blob worker in VS Code webviews', () => {
         const repoRoot = path.resolve(__dirname, '..', '..');
         const buildSource = fs.readFileSync(path.join(repoRoot, 'esbuild.js'), 'utf8');
@@ -582,8 +627,11 @@ suite('Webview resource loading', () => {
         assert.match(tikzJaxSource, /URL\.createObjectURL\(new Blob/);
         assert.match(tikzJaxSource, /new o\([^,]+,\{CORSWorkaround:!1\}\)/);
         assert.match(tikzJaxSource, /tex_files\/tikzlibrarycalc\.code\.tex\.gz/);
+        assert.match(tikzJaxSource, /Promise\.all\(/);
         assert.match(tikzJaxSource, /snaptexAssets\[A\]=await c\(A\)/);
         assert.match(tikzJaxSource, /r\.load\(\{base:e,assets:snaptexAssets\}/);
+        assert.match(tikzJaxSource, /!e\.isConnected&&\(!e\.loader\|\|!e\.loader\.isConnected\)/);
+        assert.match(tikzJaxSource, /if\(!r\.isConnected\)return/);
         assert.doesNotMatch(tikzJaxSource, /new o\(`\$\{e\}\/run-tex\.js`,\{CORSWorkaround:!1\}\)/);
         assert.doesNotMatch(tikzJaxSource, /new o\(`\$\{e\}\/run-tex\.js`\)/);
         assert.doesNotMatch(tikzJaxSource, /try\{await r\.load\(e\)\}catch\(e\)\{console\.log\(e\)\}return r/);

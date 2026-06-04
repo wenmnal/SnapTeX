@@ -29,6 +29,11 @@
     window.tikzJaxLoadPromise = null;
     window.tikzJaxFailed = false;
     const TIKZ_ACTIVE_RENDER_TIMEOUT_MS = 120000;
+    const TIKZ_RENDER_DEBOUNCE_MS = 1500;
+    const TIKZ_PENDING_SCRIPT_TYPE = 'text/snaptex-tikz';
+    const TIKZ_ACTIVE_SCRIPT_TYPE = 'text/tikz';
+    const TIKZ_PENDING_SCRIPT_SELECTOR = `script[type="${TIKZ_PENDING_SCRIPT_TYPE}"]`;
+    const TIKZ_SCRIPT_SELECTOR = `${TIKZ_PENDING_SCRIPT_SELECTOR}, script[type="${TIKZ_ACTIVE_SCRIPT_TYPE}"]`;
 
     window.ensureTikzJaxLoaded = function() {
         if (window.TikzJax) {
@@ -116,6 +121,24 @@
             setTikzContainerState(container, 'queued');
             container.setAttribute('data-tikz-watchdog', 'true');
         });
+    };
+
+    window.activatePendingTikzScripts = function(root = document) {
+        const pendingScripts = Array.from(root.querySelectorAll(TIKZ_PENDING_SCRIPT_SELECTOR));
+        pendingScripts.forEach(script => {
+            if (!script.isConnected) return;
+
+            const activeScript = document.createElement('script');
+            for (const attr of script.attributes) {
+                if (attr.name !== 'type') {
+                    activeScript.setAttribute(attr.name, attr.value);
+                }
+            }
+            activeScript.type = TIKZ_ACTIVE_SCRIPT_TYPE;
+            activeScript.textContent = script.textContent;
+            script.replaceWith(activeScript);
+        });
+        return pendingScripts.length;
     };
 
     document.addEventListener('tikzjax-tex-input', event => {
@@ -526,8 +549,9 @@
         }
 
         triggerTikzRendering() {
-            if (this.contentContainer.querySelector('script[type="text/tikz"]')) {
+            if (this.contentContainer.querySelector(TIKZ_SCRIPT_SELECTOR)) {
                  window.watchPendingTikzContainers(this.contentContainer);
+                 window.activatePendingTikzScripts(this.contentContainer);
                  window.ensureTikzJaxLoaded().catch(error => {
                      window.failPendingTikzContainers('TikZ rendering failed.');
                      console.warn('[SnapTeX] Failed to load TikZJax for tooltip content.', error);
@@ -589,6 +613,7 @@
             };
             this.pdfObserver = null;
             this.pdfRenderTimer = null;
+            this.tikzRenderTimer = null;
 
             // Initialize Tooltip Manager
             this.tooltipManager = new TooltipManager();
@@ -696,17 +721,23 @@
 
         // Manually trigger TikZJax to scan the document
         triggerTikzRendering() {
-            setTimeout(() => {
-                const unrendered = document.querySelector('script[type="text/tikz"]');
+            if (this.tikzRenderTimer) {
+                clearTimeout(this.tikzRenderTimer);
+            }
+
+            this.tikzRenderTimer = setTimeout(() => {
+                this.tikzRenderTimer = null;
+                const unrendered = document.querySelector(TIKZ_SCRIPT_SELECTOR);
                 if (unrendered && !window.tikzJaxFailed) {
                     console.log('[SnapTeX] Loading TikZJax for TikZ content...');
                     window.watchPendingTikzContainers(document);
+                    window.activatePendingTikzScripts(document);
                     window.ensureTikzJaxLoaded().catch(error => {
                         window.failPendingTikzContainers('TikZ rendering failed.');
                         console.warn('[SnapTeX] Failed to load TikZJax for preview content.', error);
                     });
                 }
-            }, 100);
+            }, TIKZ_RENDER_DEBOUNCE_MS);
         }
 
         onRenderComplete(savedScrollState) {
