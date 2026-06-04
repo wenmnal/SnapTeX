@@ -86,8 +86,7 @@ function createDocument(
         bodyText,
         blockSpans,
         blockHashes: blockTexts.map(text => stableHash(text)),
-        blockLines: blockSpans.map(span => span.line),
-        blockLineCounts: blockSpans.map(span => span.lineCount),
+        metadataSensitiveBlocks: blockTexts.map(text => text.trim().includes('\\maketitle')),
         filePool: [],
         sourceFileIndices: new Uint16Array(0),
         sourceLines: new Int32Array(0),
@@ -789,6 +788,24 @@ suite('SmartRenderer', () => {
         assert.equal(payload.deleteCount, 1);
         assert.equal(payload.htmls?.length, 1);
         assert.match(payload.htmls?.[0] ?? '', /B changed/);
+    });
+
+    test('reads only changed block text for localized hash patches', () => {
+        const renderer = new SmartRenderer(new MemoryFileProvider());
+        renderer.render(createDocument(['A', 'B', 'C']));
+
+        const nextDoc = createDocument(['A', 'B changed', 'C']);
+        const reads: number[] = [];
+        const getBlockText = nextDoc.getBlockText.bind(nextDoc);
+        nextDoc.getBlockText = (index: number) => {
+            reads.push(index);
+            return getBlockText(index);
+        };
+
+        const payload = renderer.render(nextDoc);
+
+        assert.equal(payload.type, 'patch');
+        assert.deepStrictEqual(reads, [1]);
     });
 
     test('adds block hashes from block text only and disables hash preservation on macro changes', () => {

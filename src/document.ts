@@ -11,8 +11,7 @@ export interface DocumentParseResult {
     bodyText: string;
     blockSpans: BlockSpan[];
     blockHashes: string[];
-    blockLines: number[];
-    blockLineCounts: number[];
+    metadataSensitiveBlocks: boolean[];
     // memory-efficient TypedArrays
     filePool: string[];
     sourceFileIndices: Uint16Array;
@@ -25,7 +24,6 @@ export interface DocumentParseResult {
 export interface BlockTextSnapshot {
     bodyText: string;
     blockSpans: BlockSpan[];
-    blockHashes: string[];
 }
 
 // Cache Entry Interface
@@ -43,8 +41,7 @@ export class LatexDocument {
     private bodyText: string = "";
     public blockSpans: BlockSpan[] = [];
     public blockHashes: string[] = [];
-    public blockLines: number[] = [];
-    public blockLineCounts: number[] = [];
+    public metadataSensitiveBlocks: boolean[] = [];
 
     public filePool: string[] = [];
     public sourceFileIndices: Uint16Array = new Uint16Array(0);
@@ -69,8 +66,7 @@ export class LatexDocument {
         this.bodyText = "";
         this.blockSpans = [];
         this.blockHashes = [];
-        this.blockLines = [];
-        this.blockLineCounts = [];
+        this.metadataSensitiveBlocks = [];
     }
 
     public getBlockCount(): number {
@@ -87,15 +83,14 @@ export class LatexDocument {
         return this.blockHashes[index];
     }
 
-    public getBlockSpan(index: number): BlockSpan | undefined {
-        return this.blockSpans[index];
+    public isMetadataSensitiveBlock(index: number): boolean {
+        return this.metadataSensitiveBlocks[index] === true;
     }
 
     public createTextSnapshot(): BlockTextSnapshot {
         return {
             bodyText: this.bodyText,
-            blockSpans: [...this.blockSpans],
-            blockHashes: [...this.blockHashes]
+            blockSpans: [...this.blockSpans]
         };
     }
 
@@ -103,8 +98,7 @@ export class LatexDocument {
         this.bodyText = result.bodyText;
         this.blockSpans = result.blockSpans;
         this.blockHashes = result.blockHashes;
-        this.blockLines = result.blockLines;
-        this.blockLineCounts = result.blockLineCounts;
+        this.metadataSensitiveBlocks = result.metadataSensitiveBlocks;
 
         // Apply optimized arrays
         this.filePool = result.filePool;
@@ -162,8 +156,7 @@ export class LatexDocument {
             bodyText,
             blockSpans: [],
             blockHashes: [],
-            blockLines: [],
-            blockLineCounts: [],
+            metadataSensitiveBlocks: [],
             // TypedArray to seal memory
             filePool: filePool,
             sourceFileIndices: new Uint16Array(fileIndices),
@@ -178,8 +171,7 @@ export class LatexDocument {
             if (this.hasRenderableContent(blockText)) {
                 res.blockSpans.push(b);
                 res.blockHashes.push(stableHash(blockText));
-                res.blockLines.push(b.line);
-                res.blockLineCounts.push(b.lineCount);
+                res.metadataSensitiveBlocks.push(blockText.trim().includes('\\maketitle'));
             }
         }
 

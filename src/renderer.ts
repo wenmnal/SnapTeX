@@ -2,7 +2,7 @@ import MarkdownIt from 'markdown-it';
 // [REMOVED] import katex (Moved to rules.ts)
 
 import { BlockTextSnapshot, LatexDocument } from './document';
-import { DiffEngine } from './diff';
+import { DiffEngine, DiffResult } from './diff';
 import { PreprocessRule, PatchPayload, RenderedBlockMeta, SourceLocation } from './types';
 import { DEFAULT_PREPROCESS_RULES, postProcessHtml } from './rules';
 import { BlockTextProvider, LatexCounterScanner } from './scanner';
@@ -16,6 +16,8 @@ export interface RenderOptions {
     deferFullHtml?: boolean;
 }
 
+const EMPTY_TEXT_SNAPSHOT: BlockTextSnapshot = { bodyText: "", blockSpans: [] };
+
 interface BlockSnapshot extends RenderedBlockMeta {
     hasBibliography: boolean;
     citationKeys: string[];
@@ -27,7 +29,7 @@ interface BlockSnapshot extends RenderedBlockMeta {
  */
 export class SmartRenderer {
     private lastBlocks: BlockSnapshot[] = [];
-    private lastTextSnapshot: BlockTextSnapshot = { bodyText: "", blockSpans: [], blockHashes: [] };
+    private lastTextSnapshot: BlockTextSnapshot = EMPTY_TEXT_SNAPSHOT;
     private lastMetaFingerprint: string = "";
     private lastMacrosJson: string = "";
     private lastCitedKeys: string[] = [];
@@ -98,7 +100,7 @@ export class SmartRenderer {
 
     public resetState() {
         this.lastBlocks = [];
-        this.lastTextSnapshot = { bodyText: "", blockSpans: [], blockHashes: [] };
+        this.lastTextSnapshot = EMPTY_TEXT_SNAPSHOT;
         this.lastMetaFingerprint = "";
         this.lastMacrosJson = "";
         this.lastCitedKeys = [];
@@ -180,8 +182,7 @@ export class SmartRenderer {
     }
 
     private applyMetadataFingerprint(text: string, metaFingerprint: string): string {
-        const trimmed = text.trim();
-        return trimmed.includes('\\maketitle') ? trimmed.replace('\\maketitle', `\\maketitle${metaFingerprint}`) : trimmed;
+        return text.includes('\\maketitle') ? text.replace('\\maketitle', `\\maketitle${metaFingerprint}`) : text;
     }
 
     private getSnapshotBlockText(snapshot: BlockTextSnapshot, index: number, metaFingerprint: string): string | undefined {
@@ -214,6 +215,38 @@ export class SmartRenderer {
         };
     }
 
+    private repositionBlockSnapshot(block: BlockSnapshot, index: number): BlockSnapshot {
+        const map = this.blockMap[index];
+        return {
+            ...block,
+            index,
+            line: map?.start ?? 0,
+            lineCount: map?.count ?? block.lineCount
+        };
+    }
+
+    private buildNextBlockSnapshots(blockCount: number, diff: DiffResult, getBlockText: (index: number) => string): BlockSnapshot[] {
+        const next: BlockSnapshot[] = new Array(blockCount);
+        const changedEnd = diff.start + diff.insertCount;
+        const suffixOffset = diff.deleteCount - diff.insertCount;
+
+        for (let index = 0; index < diff.start; index++) {
+            const oldBlock = this.lastBlocks[index];
+            next[index] = oldBlock ? this.repositionBlockSnapshot(oldBlock, index) : this.buildBlockMeta(getBlockText(index), index);
+        }
+
+        for (let index = diff.start; index < changedEnd; index++) {
+            next[index] = this.buildBlockMeta(getBlockText(index), index);
+        }
+
+        for (let index = changedEnd; index < blockCount; index++) {
+            const oldBlock = this.lastBlocks[index + suffixOffset];
+            next[index] = oldBlock ? this.repositionBlockSnapshot(oldBlock, index) : this.buildBlockMeta(getBlockText(index), index);
+        }
+
+        return next;
+    }
+
     public renderBlockByIndex(index: number): string | undefined {
         const text = this.getSnapshotBlockText(this.lastTextSnapshot, index, this.lastMetaFingerprint);
         if (text === undefined) { return undefined; }
@@ -236,7 +269,7 @@ export class SmartRenderer {
         if (macrosChanged) {
             this.rebuildMarkdownEngine(doc.metadata.macros);
             this.lastBlocks = [];
-            this.lastTextSnapshot = { bodyText: "", blockSpans: [], blockHashes: [] };
+            this.lastTextSnapshot = EMPTY_TEXT_SNAPSHOT;
             this.lastMetaFingerprint = "";
             this.lastMacrosJson = currentMacrosJson;
         }
@@ -258,6 +291,10 @@ export class SmartRenderer {
             return newTextCache.get(index) ?? '';
         };
         const getNewBlockHash = (index: number): string => {
+            const rawHash = doc.getBlockHash(index);
+            if (!doc.isMetadataSensitiveBlock(index)) {
+                return rawHash ?? stableHash(getNewBlockText(index));
+            }
             if (!newHashCache.has(index)) {
                 newHashCache.set(index, stableHash(getNewBlockText(index)));
             }
@@ -271,9 +308,9 @@ export class SmartRenderer {
         const newHashBlocks = Array.from({ length: blockCount }, (_unused, index) => ({ hash: getNewBlockHash(index) }));
 
         // 3. Block Map
-        this.blockMap = doc.blockLines.map((line, i) => ({
-            start: doc.contentStartLineOffset + line,
-            count: doc.blockLineCounts[i]
+        this.blockMap = doc.blockSpans.map(span => ({
+            start: doc.contentStartLineOffset + span.line,
+            count: span.lineCount
         }));
 
         // 4. Scanner
@@ -344,7 +381,7 @@ export class SmartRenderer {
         // 7. Determine Update Strategy (Evaluate using diff.insertCount instead of insertedHtmls.length)
         const isFullUpdate = this.lastBlocks.length === 0 || diff.insertCount > 50 || diff.deleteCount > 50;
         let payload: PatchPayload;
-        const blockMeta = Array.from({ length: blockCount }, (_unused, index) => this.buildBlockMeta(getNewBlockText(index), index));
+        const blockMeta = this.buildNextBlockSnapshots(blockCount, diff, getNewBlockText);
         const nextTextSnapshot = doc.createTextSnapshot();
 
         if (isFullUpdate) {
