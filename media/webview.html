@@ -29,6 +29,63 @@
     window.tikzJaxLoadPromise = null;
     window.tikzJaxFailed = false;
     const TIKZ_ACTIVE_RENDER_TIMEOUT_MS = 120000;
+    const TIKZ_BATCH_RENDER_TIMEOUT_MS = 125000;
+    const TIKZ_RENDER_DEBOUNCE_MS = 200;
+    const TIKZ_PENDING_SCRIPT_TYPE = 'text/snaptex-tikz';
+    const TIKZ_ACTIVE_SCRIPT_TYPE = 'text/tikz';
+    const TIKZ_PENDING_SCRIPT_SELECTOR = `script[type="${TIKZ_PENDING_SCRIPT_TYPE}"]`;
+    const TIKZ_SCRIPT_SELECTOR = `${TIKZ_PENDING_SCRIPT_SELECTOR}, script[type="${TIKZ_ACTIVE_SCRIPT_TYPE}"]`;
+
+    function hasRenderedTikz(container) {
+        return !!container.querySelector('svg[role="img"]:not(.tikz-stale-preview)');
+    }
+
+    class CoalescingTaskScheduler {
+        constructor({ debounceMs, run, onError }) {
+            this.debounceMs = debounceMs;
+            this.run = run;
+            this.onError = onError || (() => {});
+            this.timer = null;
+            this.pending = false;
+            this.running = false;
+        }
+
+        request() {
+            this.pending = true;
+            if (this.running) return;
+            this.schedule();
+        }
+
+        schedule() {
+            if (this.timer) {
+                clearTimeout(this.timer);
+            }
+            this.timer = setTimeout(() => this.flush(), this.debounceMs);
+        }
+
+        async flush() {
+            this.timer = null;
+            if (!this.pending || this.running) return;
+
+            this.pending = false;
+            this.running = true;
+            try {
+                await this.run();
+            } catch (error) {
+                this.onError(error);
+            } finally {
+                this.running = false;
+                if (this.pending) {
+                    this.schedule();
+                }
+            }
+        }
+    }
+
+    function notifyTikzContainerSettled(container) {
+        if (!container || !container.isConnected) return;
+        container.dispatchEvent(new CustomEvent('snaptex-tikz-settled', { bubbles: true }));
+    }
 
     window.ensureTikzJaxLoaded = function() {
         if (window.TikzJax) {
@@ -86,13 +143,16 @@
     function armTikzRenderTimer(container) {
         clearTikzRenderTimer(container);
         container.__snaptexTikzRenderTimer = setTimeout(() => {
-            if (!container.isConnected || container.querySelector('svg[role="img"]')) return;
+            if (!container.isConnected || hasRenderedTikz(container)) return;
             window.failTikzContainer(container, 'TikZ rendering timed out.');
         }, TIKZ_ACTIVE_RENDER_TIMEOUT_MS);
     }
 
     window.failTikzContainer = function(container, message) {
-        if (!container || !container.isConnected || container.querySelector('svg[role="img"]')) return;
+        if (!container || !container.isConnected) return;
+        const state = container.getAttribute('data-tikz-state');
+        const isActive = state === 'queued' || state === 'rendering' || state === 'stale';
+        if (hasRenderedTikz(container) && !isActive) return;
 
         clearTikzRenderTimer(container);
         setTikzContainerState(container, 'failed');
@@ -101,6 +161,7 @@
         errorEl.style.cssText = 'padding: 12px; color: #8a1f11; background: #fff3f0; border: 1px solid #f0c6bd; font: 12px sans-serif;';
         errorEl.textContent = message;
         container.replaceChildren(errorEl);
+        notifyTikzContainerSettled(container);
     };
 
     window.failPendingTikzContainers = function(message) {
@@ -111,11 +172,29 @@
 
     window.watchPendingTikzContainers = function(root = document) {
         root.querySelectorAll('.tikz-container').forEach(container => {
-            if (container.querySelector('svg[role="img"]') || container.getAttribute('data-tikz-state') === 'failed') return;
+            if (hasRenderedTikz(container) || container.getAttribute('data-tikz-state') === 'failed') return;
 
             setTikzContainerState(container, 'queued');
             container.setAttribute('data-tikz-watchdog', 'true');
         });
+    };
+
+    window.activatePendingTikzScripts = function(root = document) {
+        const pendingScripts = Array.from(root.querySelectorAll(TIKZ_PENDING_SCRIPT_SELECTOR));
+        pendingScripts.forEach(script => {
+            if (!script.isConnected) return;
+
+            const activeScript = document.createElement('script');
+            for (const attr of script.attributes) {
+                if (attr.name !== 'type') {
+                    activeScript.setAttribute(attr.name, attr.value);
+                }
+            }
+            activeScript.type = TIKZ_ACTIVE_SCRIPT_TYPE;
+            activeScript.textContent = script.textContent;
+            script.replaceWith(activeScript);
+        });
+        return pendingScripts.length;
     };
 
     document.addEventListener('tikzjax-tex-input', event => {
@@ -131,7 +210,17 @@
         if (!container) return;
 
         clearTikzRenderTimer(container);
+        container.querySelectorAll('.tikz-stale-preview').forEach(preview => preview.remove());
         setTikzContainerState(container, 'rendered');
+        notifyTikzContainerSettled(container);
+    });
+
+    document.addEventListener('tikzjax-load-failed', event => {
+        const container = getTikzContainerFromEvent(event);
+        if (!container) return;
+
+        const message = event.detail?.message || 'TikZ rendering failed.';
+        window.failTikzContainer(container, message);
     });
 
     // --- Global PDF Helper ---
@@ -526,8 +615,9 @@
         }
 
         triggerTikzRendering() {
-            if (this.contentContainer.querySelector('script[type="text/tikz"]')) {
+            if (this.contentContainer.querySelector(TIKZ_SCRIPT_SELECTOR)) {
                  window.watchPendingTikzContainers(this.contentContainer);
+                 window.activatePendingTikzScripts(this.contentContainer);
                  window.ensureTikzJaxLoaded().catch(error => {
                      window.failPendingTikzContainers('TikZ rendering failed.');
                      console.warn('[SnapTeX] Failed to load TikZJax for tooltip content.', error);
@@ -589,6 +679,14 @@
             };
             this.pdfObserver = null;
             this.pdfRenderTimer = null;
+            this.tikzRenderScheduler = new CoalescingTaskScheduler({
+                debounceMs: TIKZ_RENDER_DEBOUNCE_MS,
+                run: () => this.runTikzRenderBatch(),
+                onError: error => {
+                    window.failPendingTikzContainers('TikZ rendering failed.');
+                    console.warn('[SnapTeX] Failed to render TikZ preview content.', error);
+                }
+            });
 
             // Initialize Tooltip Manager
             this.tooltipManager = new TooltipManager();
@@ -694,19 +792,108 @@
             });
         }
 
+        collectTikzPreviews(block) {
+            if (!block) return [];
+            return Array.from(block.querySelectorAll('.tikz-container')).map(container => {
+                const rendered = container.querySelector('svg[role="img"]:not(.tikz-stale-preview)');
+                return rendered ? rendered.cloneNode(true) : null;
+            });
+        }
+
+        attachStaleTikzPreviews(block, previews) {
+            if (!block || !previews || previews.length === 0) return;
+            const containers = Array.from(block.querySelectorAll('.tikz-container'));
+            containers.forEach((container, index) => {
+                if (hasRenderedTikz(container) || container.querySelector('.tikz-stale-preview')) return;
+
+                const preview = previews[index];
+                if (!preview) return;
+
+                preview.classList.add('tikz-stale-preview');
+                container.appendChild(preview);
+                setTikzContainerState(container, 'stale');
+            });
+        }
+
+        applyStaleTikzPreviewsToBlock(newBlock, oldBlock) {
+            const previews = this.collectTikzPreviews(oldBlock);
+            this.attachStaleTikzPreviews(newBlock, previews);
+        }
+
+        replaceBlockPreservingTikz(oldBlock, newBlock) {
+            oldBlock.replaceWith(newBlock);
+            this.applyStaleTikzPreviewsToBlock(newBlock, oldBlock);
+        }
+
+        getPendingTikzContainers(root = document) {
+            return Array.from(root.querySelectorAll('.tikz-container')).filter(container => {
+                if (hasRenderedTikz(container) || container.getAttribute('data-tikz-state') === 'failed') return false;
+                return !!container.querySelector(TIKZ_SCRIPT_SELECTOR);
+            });
+        }
+
+        waitForTikzBatch(containers) {
+            return new Promise(resolve => {
+                let interval = null;
+                let timeout = null;
+                let resolved = false;
+                const isSettled = container => (
+                    !container.isConnected
+                    || hasRenderedTikz(container)
+                    || container.getAttribute('data-tikz-state') === 'failed'
+                );
+                const cleanup = () => {
+                    document.removeEventListener('snaptex-tikz-settled', check, true);
+                    if (interval) {
+                        clearInterval(interval);
+                    }
+                    if (timeout) {
+                        clearTimeout(timeout);
+                    }
+                };
+                const check = () => {
+                    if (resolved || !containers.every(isSettled)) return;
+
+                    resolved = true;
+                    cleanup();
+                    resolve();
+                };
+
+                document.addEventListener('snaptex-tikz-settled', check, true);
+                interval = setInterval(check, 100);
+                timeout = setTimeout(() => {
+                    if (resolved) return;
+
+                    resolved = true;
+                    cleanup();
+                    resolve();
+                }, TIKZ_BATCH_RENDER_TIMEOUT_MS);
+                setTimeout(check, 0);
+            });
+        }
+
+        async runTikzRenderBatch() {
+            if (!this.contentRoot.querySelector(TIKZ_SCRIPT_SELECTOR) || window.tikzJaxFailed) return;
+
+            await window.ensureTikzJaxLoaded();
+            const containers = this.getPendingTikzContainers(this.contentRoot);
+            if (containers.length === 0 || window.tikzJaxFailed) return;
+
+            console.log('[SnapTeX] Loading TikZJax for TikZ content...');
+            window.watchPendingTikzContainers(this.contentRoot);
+            const activated = window.activatePendingTikzScripts(this.contentRoot);
+            if (activated === 0) return;
+
+            await this.waitForTikzBatch(containers);
+        }
+
         // Manually trigger TikZJax to scan the document
         triggerTikzRendering() {
-            setTimeout(() => {
-                const unrendered = document.querySelector('script[type="text/tikz"]');
-                if (unrendered && !window.tikzJaxFailed) {
-                    console.log('[SnapTeX] Loading TikZJax for TikZ content...');
-                    window.watchPendingTikzContainers(document);
-                    window.ensureTikzJaxLoaded().catch(error => {
-                        window.failPendingTikzContainers('TikZ rendering failed.');
-                        console.warn('[SnapTeX] Failed to load TikZJax for preview content.', error);
-                    });
-                }
-            }, 100);
+            const pendingTikz = this.contentRoot.querySelector(TIKZ_SCRIPT_SELECTOR);
+            if (!pendingTikz || window.tikzJaxFailed) return;
+
+            window.ensureTikzJaxLoaded().catch(() => {});
+            this.tikzRenderScheduler.request();
         }
 
         onRenderComplete(savedScrollState) {
@@ -858,7 +1045,9 @@
                 const oldEl = oldElements[i];
                 if (!newEl) { if (oldEl) oldEl.remove(); continue; }
                 if (!oldEl) { this.contentRoot.appendChild(newEl); continue; }
-                if (oldEl.outerHTML !== newEl.outerHTML) { oldEl.replaceWith(newEl); }
+                if (oldEl.outerHTML !== newEl.outerHTML) {
+                    this.replaceBlockPreservingTikz(oldEl, newEl);
+                }
             }
         }
 
@@ -866,6 +1055,18 @@
             const { start, deleteCount, htmls = [], shift = 0 } = payload;
             const targetIndex = start + deleteCount;
             const referenceNode = this.contentRoot.children[targetIndex] || null;
+            const staleTikzByIndex = new Map();
+
+            for (let i = 0; i < deleteCount; i++) {
+                const block = this.contentRoot.children[start + i];
+                const index = block?.getAttribute('data-index');
+                const previews = this.collectTikzPreviews(block);
+                if (index !== null && previews.some(Boolean)) {
+                    staleTikzByIndex.set(index, previews);
+                }
+            }
+
+            const insertedBlocks = [];
             for (let i = 0; i < deleteCount; i++) {
                 if (this.contentRoot.children[start]) this.contentRoot.removeChild(this.contentRoot.children[start]);
             }
@@ -875,9 +1076,16 @@
                 htmls.forEach(html => {
                     tempDiv.innerHTML = html;
                     const node = tempDiv.firstElementChild;
-                    if (node) fragment.appendChild(node);
+                    if (node) {
+                        insertedBlocks.push(node);
+                        fragment.appendChild(node);
+                    }
                 });
                 this.contentRoot.insertBefore(fragment, referenceNode);
+                insertedBlocks.forEach(block => {
+                    const index = block.getAttribute('data-index');
+                    this.attachStaleTikzPreviews(block, staleTikzByIndex.get(index));
+                });
             }
             if (shift !== 0) {
                 let node = this.contentRoot.children[start + htmls.length];
@@ -891,7 +1099,14 @@
                 Object.keys(payload.dirtyBlocks).forEach(indexStr => {
                     const idx = parseInt(indexStr);
                     const targetBlock = document.querySelector('.latex-block[data-index="' + idx + '"]');
-                    if (targetBlock) { targetBlock.outerHTML = payload.dirtyBlocks[idx]; }
+                    if (targetBlock) {
+                        const tempDiv = document.createElement('div');
+                        tempDiv.innerHTML = payload.dirtyBlocks[idx];
+                        const replacement = tempDiv.firstElementChild;
+                        if (replacement) {
+                            this.replaceBlockPreservingTikz(targetBlock, replacement);
+                        }
+                    }
                 });
             }
         }

@@ -52,6 +52,7 @@ function createDocument(
     blockTexts: string[],
     options: {
         macros?: Record<string, string>;
+        tikzGlobal?: string;
         title?: string;
         author?: string;
         date?: string;
@@ -63,7 +64,7 @@ function createDocument(
     doc.blockLineCounts = blockTexts.map(text => text.split(/\r?\n/).length);
     doc.metadata = {
         macros: options.macros ?? {},
-        tikzGlobal: '',
+        tikzGlobal: options.tikzGlobal ?? '',
         tikzMacroMap: new Map(),
         title: options.title,
         author: options.author,
@@ -461,8 +462,64 @@ suite('SmartRenderer', () => {
         ]);
 
         assert.match(html, /class="tikz-container"/);
-        assert.match(html, /<script type="text\/tikz"/);
+        assert.match(html, /<script type="text\/snaptex-tikz"/);
         assert.doesNotMatch(html, /\\resizebox/);
+    });
+
+    test('injects only TikZ libraries used by each picture', () => {
+        const renderer = new SmartRenderer(new MemoryFileProvider());
+        const doc = createDocument([
+            [
+                '\\begin{tikzpicture}',
+                '\\path coordinate (A) at (0, 0) coordinate (E) at (15, 0);',
+                '\\path coordinate (B) at ($ (A)!.5!(E) $);',
+                '\\draw (A) -- (B);',
+                '\\node[dot] at (B) {};',
+                '\\end{tikzpicture}'
+            ].join('\n')
+        ], {
+            tikzGlobal: [
+                '\\usetikzlibrary{calc, shapes.geometric, positioning, decorations.pathreplacing, patterns, arrows.meta, backgrounds, angles}',
+                '\\definecolor{brand}{RGB}{1,2,3}',
+                '\\tikzset{dot/.style={circle,fill}}',
+                '\\tikzset{braceStyle/.style={decorate, decoration={brace}}}',
+                '\\tikzset{posStyle/.style={right=of other}}'
+            ].join('\n')
+        });
+        const payload = renderer.render(doc);
+        const html = payload.htmls?.join('') ?? '';
+
+        assert.match(html, /\\usetikzlibrary\{calc\}/);
+        assert.match(html, /\\definecolor\{brand\}/);
+        assert.match(html, /\\tikzset\{dot\/\.style/);
+        assert.doesNotMatch(html, /arrows\.meta/);
+        assert.doesNotMatch(html, /backgrounds/);
+        assert.doesNotMatch(html, /decorations\.pathreplacing/);
+        assert.doesNotMatch(html, /patterns/);
+        assert.doesNotMatch(html, /shapes\.geometric/);
+    });
+
+    test('includes TikZ libraries required by used global styles', () => {
+        const renderer = new SmartRenderer(new MemoryFileProvider());
+        const doc = createDocument([
+            [
+                '\\begin{tikzpicture}',
+                '\\draw[braceStyle] (0,0) -- (1,0);',
+                '\\end{tikzpicture}'
+            ].join('\n')
+        ], {
+            tikzGlobal: [
+                '\\usetikzlibrary{calc, decorations.pathreplacing, positioning}',
+                '\\tikzset{braceStyle/.style={decorate, decoration={brace}}}',
+                '\\tikzset{posStyle/.style={right=of other}}'
+            ].join('\n')
+        });
+        const payload = renderer.render(doc);
+        const html = payload.htmls?.join('') ?? '';
+
+        assert.match(html, /\\usetikzlibrary\{decorations\.pathreplacing\}/);
+        assert.doesNotMatch(html, /positioning/);
+        assert.doesNotMatch(html, /calc/);
     });
 });
 
@@ -543,7 +600,9 @@ suite('Webview resource loading', () => {
         assert.match(webviewSource, /window\.tikzJaxJsUri = '\{\{tikzJaxJsUri\}\}'/);
         assert.match(webviewSource, /window\.ensureTikzJaxLoaded = function\(\)/);
         assert.match(webviewSource, /script\.src = window\.tikzJaxJsUri/);
-        assert.match(webviewSource, /querySelector\('script\[type="text\/tikz"\]'\)/);
+        assert.match(webviewSource, /TIKZ_PENDING_SCRIPT_TYPE = 'text\/snaptex-tikz'/);
+        assert.match(webviewSource, /window\.activatePendingTikzScripts = function/);
+        assert.match(webviewSource, /querySelector\(TIKZ_SCRIPT_SELECTOR\)/);
     });
 
     test('marks stuck TikZ renders as failed instead of leaving permanent loaders', () => {
@@ -568,6 +627,58 @@ suite('Webview resource loading', () => {
         assert.doesNotMatch(webviewSource, /setTimeout\(\(\) => \{[\s\S]*window\.failPendingTikzContainers\('TikZ rendering timed out\.'\)/);
     });
 
+    test('coalesces TikZ activation so edits during a render only queue the latest run', () => {
+        const repoRoot = path.resolve(__dirname, '..', '..');
+        const webviewSource = fs.readFileSync(path.join(repoRoot, 'media', 'webview.html'), 'utf8');
+
+        assert.match(webviewSource, /const TIKZ_RENDER_DEBOUNCE_MS = 200/);
+        assert.match(webviewSource, /class CoalescingTaskScheduler/);
+        assert.match(webviewSource, /this\.running = false/);
+        assert.match(webviewSource, /this\.pending = true/);
+        assert.match(webviewSource, /if \(this\.running\) return/);
+        assert.match(webviewSource, /if \(this\.pending\) \{[\s\S]*this\.schedule\(\);[\s\S]*\}/);
+        assert.match(webviewSource, /this\.tikzRenderScheduler = new CoalescingTaskScheduler/);
+        assert.match(webviewSource, /runTikzRenderBatch\(\)/);
+        assert.match(webviewSource, /waitForTikzBatch\(containers\)/);
+        assert.match(webviewSource, /TIKZ_BATCH_RENDER_TIMEOUT_MS/);
+        assert.match(webviewSource, /setTimeout\(\(\) => \{[\s\S]*resolve\(\);[\s\S]*\}, TIKZ_BATCH_RENDER_TIMEOUT_MS\)/);
+        assert.match(webviewSource, /snaptex-tikz-settled/);
+        assert.match(webviewSource, /this\.contentRoot\.querySelector\(TIKZ_SCRIPT_SELECTOR\)/);
+        assert.match(webviewSource, /this\.getPendingTikzContainers\(this\.contentRoot\)/);
+        assert.match(webviewSource, /window\.watchPendingTikzContainers\(this\.contentRoot\)/);
+        assert.match(webviewSource, /window\.activatePendingTikzScripts\(this\.contentRoot\)/);
+        assert.doesNotMatch(webviewSource, /window\.activatePendingTikzScripts\(document\)/);
+        assert.match(webviewSource, /script\.replaceWith\(activeScript\)/);
+    });
+
+    test('keeps the previous TikZ SVG visible while a replacement render is pending', () => {
+        const repoRoot = path.resolve(__dirname, '..', '..');
+        const webviewSource = fs.readFileSync(path.join(repoRoot, 'media', 'webview.html'), 'utf8');
+        const styleSource = fs.readFileSync(path.join(repoRoot, 'media', 'preview-style.css'), 'utf8');
+
+        assert.match(webviewSource, /collectTikzPreviews\(block\)/);
+        assert.match(webviewSource, /attachStaleTikzPreviews\(block, previews\)/);
+        assert.match(webviewSource, /replaceBlockPreservingTikz\(oldBlock, newBlock\)/);
+        assert.match(webviewSource, /applyStaleTikzPreviewsToBlock\(newBlock, oldBlock\)/);
+        assert.match(webviewSource, /preview\.classList\.add\('tikz-stale-preview'\)/);
+        assert.match(webviewSource, /container\.querySelectorAll\('\.tikz-stale-preview'\)\.forEach\(preview => preview\.remove\(\)\)/);
+        assert.match(webviewSource, /svg\[role="img"\]:not\(\.tikz-stale-preview\)/);
+        assert.match(styleSource, /\.tikz-container\[data-tikz-state="queued"\] > svg:not\(\.tikz-stale-preview\)/);
+        assert.match(styleSource, /\.tikz-stale-preview/);
+    });
+
+    test('routes TikZ compile failures through the webview error state', () => {
+        const repoRoot = path.resolve(__dirname, '..', '..');
+        const webviewSource = fs.readFileSync(path.join(repoRoot, 'media', 'webview.html'), 'utf8');
+        const tikzJaxSource = fs.readFileSync(path.join(repoRoot, 'media', 'vendor', 'tikzjax', 'tikzjax.js'), 'utf8');
+
+        assert.match(webviewSource, /document\.addEventListener\('tikzjax-load-failed'/);
+        assert.match(webviewSource, /window\.failTikzContainer\(container, message\)/);
+        assert.match(tikzJaxSource, /tikzjax-load-failed/);
+        assert.match(tikzJaxSource, /new CustomEvent\("tikzjax-load-failed"/);
+        assert.doesNotMatch(tikzJaxSource, /invalid\.site\/img-not-found\.png/);
+    });
+
     test('bootstraps dynamic TikZJax with a self-contained blob worker in VS Code webviews', () => {
         const repoRoot = path.resolve(__dirname, '..', '..');
         const buildSource = fs.readFileSync(path.join(repoRoot, 'esbuild.js'), 'utf8');
@@ -576,14 +687,23 @@ suite('Webview resource loading', () => {
         const calcLibraryPath = path.join(repoRoot, 'media', 'vendor', 'tikzjax', 'tex_files', 'tikzlibrarycalc.code.tex.gz');
 
         assert.match(buildSource, /patchTikzJaxWorkerBootstrap/);
+        assert.match(buildSource, /function replaceOrThrow/);
+        assert.match(buildSource, /throw new Error\(`\[build\] TikZJax/);
+        assert.doesNotMatch(buildSource, /console\.warn\('\[build\] Warning: TikZJax/);
+        assert.doesNotMatch(buildSource, /require\('zlib'\)/);
         assert.match(buildSource, /CORSWorkaround:!1/);
         assert.ok(fs.existsSync(calcLibraryPath));
         assert.match(tikzJaxSource, /fetch\(`\$\{e\}\/run-tex\.js`\)/);
         assert.match(tikzJaxSource, /URL\.createObjectURL\(new Blob/);
         assert.match(tikzJaxSource, /new o\([^,]+,\{CORSWorkaround:!1\}\)/);
         assert.match(tikzJaxSource, /tex_files\/tikzlibrarycalc\.code\.tex\.gz/);
+        assert.match(tikzJaxSource, /Promise\.all\(/);
         assert.match(tikzJaxSource, /snaptexAssets\[A\]=await c\(A\)/);
         assert.match(tikzJaxSource, /r\.load\(\{base:e,assets:snaptexAssets\}/);
+        assert.match(tikzJaxSource, /!e\.isConnected&&\(!e\.loader\|\|!e\.loader\.isConnected\)/);
+        assert.match(tikzJaxSource, /if\(!r\.isConnected\)return/);
+        assert.match(tikzJaxSource, /window\.addEventListener\("unload",Z\)/);
+        assert.doesNotMatch(tikzJaxSource, /revokeObjectURL[\s\S]*tikzjax-load-finished/);
         assert.doesNotMatch(tikzJaxSource, /new o\(`\$\{e\}\/run-tex\.js`,\{CORSWorkaround:!1\}\)/);
         assert.doesNotMatch(tikzJaxSource, /new o\(`\$\{e\}\/run-tex\.js`\)/);
         assert.doesNotMatch(tikzJaxSource, /try\{await r\.load\(e\)\}catch\(e\)\{console\.log\(e\)\}return r/);
