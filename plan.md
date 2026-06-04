@@ -1,6 +1,6 @@
 # SnapTeX Optimization TODO
 
-> Current branch: `dev`  
+> Current branch: `dev`
 > Last verified: `npm test` passed with 57 tests after extension-host update posting cleanup.
 > Rule for future work: keep each change block small, add or update tests before behavior changes, then run `npm test` and commit only the files for that block.
 
@@ -268,9 +268,6 @@
 - [x] Add a TikZ render watchdog so failed or stuck TikZJax jobs do not leave permanent loading indicators.
 - [x] Coalesce TikZ render requests with a short debounce so repeated edits do not queue stale TikZJax jobs.
 - [x] Add a TikZ batch watchdog so one stuck batch does not block future renders.
-- [ ] Reduce full-update frequency.
-  - Keep current fixed `> 50` behavior until this is explicitly revisited.
-  - Keep full update for macro/metadata-sensitive changes.
 
 ### D. PDF Pipeline Optimization
 
@@ -310,19 +307,6 @@
 - [x] Introduce a narrow `RenderContext` interface.
 - [x] Remove the `rules.ts -> SmartRenderer` import.
 - [x] Replace `PreprocessRule.apply(..., renderer: any)` with `RenderContext`.
-- [ ] Split `rules.ts` into modules.
-  - math.
-  - refs.
-  - citations.
-  - figures.
-  - tables.
-  - algorithms.
-  - theorems.
-  - sections.
-  - lists.
-  - tikz.
-  - styles.
-  - common.
 - [ ] Move `media/webview.html` inline script into bundled TypeScript modules.
   - main.
   - controller.
@@ -344,6 +328,10 @@
 - [ ] Update `DiffEngine` to diff by hash/meta.
 - [ ] Update scanner input to a `BlockTextProvider`.
 - [ ] Add incremental scanner checkpoints later.
+- [ ] Very low priority: track a bibliography fingerprint and mark citation/bibliography blocks dirty when only `.bib` content changes.
+  - Do not proactively schedule this work; revisit only if the user explicitly asks for live `.bib` refresh.
+  - Avoid adding file-watcher/module complexity now.
+  - Expected behavior: no full document re-render, just re-render blocks whose rendered output depends on `bibEntries`.
 
 ### I. Shell-Based Webview Virtualization
 
@@ -360,7 +348,6 @@
 - [x] Make forward sync mount target shells before calculating block-relative scroll position.
 - [x] Use directional preload and retain windows instead of manual `scrollY` compensation for smoother upward scrolling.
 - [x] Lock shell heights during mount and refresh real measured height only when the shell is not above the viewport.
-- [ ] Make preview-to-editor double-click use shell/block index safely.
 - [x] Add height estimation and hash-based height cache.
 - [x] Reevaluate `content-visibility` with shell virtualization.
 
