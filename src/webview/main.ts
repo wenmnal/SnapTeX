@@ -8,7 +8,6 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
     window.snaptexVsCodeApi = vscode;
     const PDF_RENDER_MARGIN = 1200;
     const PDF_RELEASE_MARGIN = 3600;
-    // --- Global PDF Helper ---
     window.pdfReqQueue = [];
     window.renderPdfToCanvas = function(path, canvasId) {
         console.log(`[SnapTeX] Queueing PDF request for ${canvasId}`);
@@ -16,22 +15,19 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
     };
 
     /**
-     * Manager: Handles multiple tooltip instances.
+     * Coordinates transient and pinned reference tooltips.
      */
     class TooltipManager {
         constructor() {
-            this.activeTransientTooltip = null; // The current unpinned tooltip (reused)
+            this.activeTransientTooltip = null;
             this.zIndexCounter = 1000;
             this.bindGlobalEvents();
         }
 
         bindGlobalEvents() {
-            // Link Hover
             document.body.addEventListener('mouseover', (e) => {
                 const link = e.target.closest('a');
                 if (link && link.getAttribute('href')?.startsWith('#')) {
-                    // Prevent triggering new preview inside an UNPINNED tooltip.
-                    // This prevents infinite nesting or accidental popups while reading a transient tooltip.
                     const parentTooltip = link.closest('.hover-tooltip');
                     if (parentTooltip && !parentTooltip.classList.contains('pinned')) {
                         return;
@@ -43,8 +39,6 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             document.body.addEventListener('mouseout', (e) => {
                 const link = e.target.closest('a');
                 if (link && link.getAttribute('href')?.startsWith('#')) {
-                    // [FIX] Don't trigger leave if moving internally within the tooltip or into the tooltip
-                    // This prevents the hide timer from starting when hovering links inside the tooltip itself
                     if (this.activeTransientTooltip &&
                         this.activeTransientTooltip.element.contains(e.relatedTarget)) {
                         return;
@@ -53,14 +47,11 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                 }
             });
 
-            // Global Mouse Interaction (Delegated to instances usually, but handled here for coordination)
             window.addEventListener('mousemove', (e) => this.broadcastMouseMove(e));
             window.addEventListener('mouseup', () => this.broadcastMouseUp());
         }
 
         onLinkEnter(link) {
-            // 1. If we have an active transient tooltip, use it.
-            // 2. If it's pinned, it's no longer transient, so we create a NEW one.
             if (!this.activeTransientTooltip || this.activeTransientTooltip.isPinned) {
                 this.activeTransientTooltip = new Tooltip(this);
             }
@@ -78,20 +69,15 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             return ++this.zIndexCounter;
         }
 
-        // Notify all tooltips of mouse moves (for drag/resize)
         broadcastMouseMove(e) {
-            // Optimization: Only strictly needed if we tracked active draggers globally,
-            // but currently Tooltip instances listen to window events conditionally.
-            // We can leave this empty or use it to manage cursors.
         }
 
         broadcastMouseUp() {
-            // Handled by instances
         }
     }
 
     /**
-     * Individual Tooltip Window Class
+     * Floating preview for references, citations, and local anchors.
      */
     class Tooltip {
         constructor(manager) {
@@ -99,18 +85,15 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             this.element = this.createDOM();
             document.body.appendChild(this.element);
 
-            // References
             this.header = this.element.querySelector('.tooltip-header');
             this.contentContainer = this.element.querySelector('.tooltip-content');
             this.pinBtn = this.element.querySelector('.pin-btn');
             this.closeBtn = this.element.querySelector('.close-btn');
 
-            // Handles
             this.resizeRight = this.element.querySelector('.resize-handle-right');
             this.resizeBottom = this.element.querySelector('.resize-handle-bottom');
             this.resizeCorner = this.element.querySelector('.resize-handle-corner');
 
-            // State
             this.isPinned = false;
             this.currentLink = null;
             this.hideTimer = null;
@@ -143,27 +126,20 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
         }
 
         bindEvents() {
-            // Self Hover (Prevent hide)
             this.element.addEventListener('mouseenter', () => this.clearHideTimer());
             this.element.addEventListener('mouseleave', () => this.startHideTimer());
 
-            // Bring to front on click
             this.element.addEventListener('mousedown', () => this.bringToFront());
 
-            // Controls
             this.pinBtn.addEventListener('click', (e) => { e.stopPropagation(); this.togglePin(); });
             this.closeBtn.addEventListener('click', (e) => { e.stopPropagation(); this.dispose(); });
 
-            // Drag
             this.header.addEventListener('mousedown', (e) => this.startDrag(e));
 
-            // Resize
             this.resizeBottom.addEventListener('mousedown', (e) => this.startResize(e, false, true));
             this.resizeRight.addEventListener('mousedown', (e) => this.startResize(e, true, false));
             this.resizeCorner.addEventListener('mousedown', (e) => this.startResize(e, true, true));
 
-            // Window level events for Drag/Resize continuity
-            // We use bounded functions to be able to remove them later (memory management)
             this._onWindowMouseMove = (e) => this.onMouseMove(e);
             this._onWindowMouseUp = (e) => this.onMouseUp(e);
             window.addEventListener('mousemove', this._onWindowMouseMove);
@@ -178,21 +154,14 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             this.isPinned = !this.isPinned;
             if (this.isPinned) {
                 this.pinBtn.classList.add('active');
-                // Mark as pinned for CSS or logic checks
                 this.element.classList.add('pinned');
-                this.clearHideTimer(); // Stay open indefinitely
-                // Once pinned, the manager forgets this tooltip as the "transient" one,
-                // so the next hover will create a NEW tooltip.
+                this.clearHideTimer();
                 if (this.manager.activeTransientTooltip === this) {
                     this.manager.activeTransientTooltip = null;
                 }
             } else {
                 this.pinBtn.classList.remove('active');
                 this.element.classList.remove('pinned');
-                // Revert to auto-hide behavior
-                // Note: We don't necessarily re-attach to manager.activeTransientTooltip.
-                // We just let it close naturally on mouse leave.
-                // If mouse is already outside, close immediately (or start timer).
                 if (!this.element.matches(':hover')) {
                     this.startHideTimer();
                 }
@@ -206,20 +175,16 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             window.removeEventListener('mousemove', this._onWindowMouseMove);
             window.removeEventListener('mouseup', this._onWindowMouseUp);
 
-            // Clean up manager reference if we were the active transient one
             if (this.manager.activeTransientTooltip === this) {
                 this.manager.activeTransientTooltip = null;
             }
         }
 
-        // --- Drag Logic ---
         startDrag(e) {
             this.isDragging = true;
 
-            // [FIX] First, lock the geometry to absolute pixels
             this.ensureAbsolutePosition();
 
-            // [FIX] Then measure (now that layout is stable)
             const rect = this.element.getBoundingClientRect();
 
             this.element.style.cursor = 'grabbing';
@@ -229,22 +194,18 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
         }
 
         startResize(e, dirX, dirY) {
-            // [FIX] First, lock the geometry.
-            // This converts 'auto' width/height to explicit 'px' values immediately.
             this.ensureAbsolutePosition();
 
-            // [FIX] Then capture the starting dimensions from the locked element
             const rect = this.element.getBoundingClientRect();
 
             this.resizeState = {
                 startX: e.clientX,
                 startY: e.clientY,
-                startWidth: rect.width, // Using rect.width is safer with border-box
+                startWidth: rect.width,
                 startHeight: rect.height,
                 dirX, dirY
             };
 
-            // Release constraints to allow resizing
             this.element.style.maxHeight = 'none';
             this.element.style.maxWidth = 'none';
 
@@ -255,15 +216,12 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
         ensureAbsolutePosition() {
             const rect = this.element.getBoundingClientRect();
 
-            // Disable CSS centering
             this.element.style.transform = 'none';
 
-            // Freeze position
             this.element.style.left = `${rect.left}px`;
             this.element.style.top = `${rect.top}px`;
             this.element.style.bottom = '';
 
-            // Freeze dimensions (Essential for smooth resizing start)
             this.element.style.width = `${rect.width}px`;
             this.element.style.height = `${rect.height}px`;
         }
@@ -274,7 +232,6 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                 const y = e.clientY - this.dragOffset.y;
                 this.element.style.left = `${x}px`;
                 this.element.style.top = `${y}px`;
-                // Ensure transform is cleared so left/top work absolutely
                 this.element.style.transform = 'none';
             } else if (this.resizeState) {
                 const { startX, startY, startWidth, startHeight, dirX, dirY } = this.resizeState;
@@ -293,12 +250,10 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             this.element.style.cursor = '';
         }
 
-        // --- Show/Hide Logic ---
         scheduleShow(link) {
             this.clearHideTimer();
             if (this.currentLink === link && this.element.classList.contains('visible')) return;
 
-            // Cancel any pending show for OTHER links on this same tooltip
             if (this.showTimer) clearTimeout(this.showTimer);
 
             this.showTimer = setTimeout(() => {
@@ -325,7 +280,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
         }
 
         startHideTimer() {
-            if (this.isPinned) return; // Never hide if pinned
+            if (this.isPinned) return;
 
             if (this.hideTimer) clearTimeout(this.hideTimer);
             this.hideTimer = setTimeout(() => {
@@ -342,7 +297,6 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
 
         hide() {
             this.element.classList.remove('visible');
-            // Wait for transition to finish then remove from DOM (since it's transient)
             setTimeout(() => {
                 if (!this.element.classList.contains('visible')) {
                     this.dispose();
@@ -390,7 +344,6 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             this.refreshPDFs();
             this.positionTooltip(linkElement);
 
-            // Trigger TikZ Rendering for tooltip content
             setTimeout(() => {
                  this.triggerTikzRendering();
             }, 10);
@@ -444,22 +397,22 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             const viewportHeight = window.innerHeight;
             const margin = 15;
 
-            // Vertical Flip
             const isTopHalf = linkRect.top < (viewportHeight / 2);
 
             if (isTopHalf) {
-                // Show Below
                 this.element.style.top = `${linkRect.bottom + margin}px`;
             } else {
-                // Show Above (Using Bottom property to stick to link)
                 const bottomDist = viewportHeight - linkRect.top + margin;
                 this.element.style.bottom = `${bottomDist}px`;
-                this.element.style.top = 'auto'; // Clear top
+                this.element.style.top = 'auto';
             }
         }
     }
 
-    // --- Main Preview Controller ---
+    /**
+     * Applies extension update messages to the preview DOM and coordinates
+     * scroll sync, block virtualization, PDF rendering, tooltips, and TikZ.
+     */
     class PreviewController {
         constructor() {
             this.contentRoot = document.getElementById('content-root');
@@ -496,7 +449,6 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                 }
             });
 
-            // Initialize Tooltip Manager
             this.tooltipManager = new TooltipManager();
 
             this.initPdfObserver();
@@ -537,21 +489,18 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                 case ExtensionToWebviewCommand.UpdateBinary:
                     let u8array;
                     if (binaryData instanceof Uint8Array) {
-                        u8array = binaryData; // Web Worker environment
+                        u8array = binaryData;
                     } else if (binaryData && binaryData.type === 'Buffer') {
-                        u8array = new Uint8Array(binaryData.data); // Node.js environment (serialized Buffer)
+                        u8array = new Uint8Array(binaryData.data);
                     } else {
-                        u8array = new Uint8Array(binaryData); // Fallback for raw arrays
+                        u8array = new Uint8Array(binaryData);
                     }
 
-                    // 2. Use the browser's native TextDecoder to instantly decompress
                     const decoder = new TextDecoder('utf-8');
                     const htmlString = decoder.decode(u8array);
 
-                    // 3. Inject the decompressed giant HTML string back into the payload object.
                     payload.html = htmlString;
 
-                    // 4. Pass the payload to the existing rendering pipeline seamlessly.
                     this.handleUpdate(payload);
                     break;
 
@@ -607,7 +556,6 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             }
             this.schedulePendingPdfRender();
 
-            // Trigger TikZ Rendering after update
             this.triggerTikzRendering();
         }
 
@@ -962,7 +910,6 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             await this.waitForTikzBatch(containers);
         }
 
-        // Manually trigger TikZJax to scan the document
         triggerTikzRendering() {
             const pendingTikz = this.contentRoot.querySelector(TIKZ_SCRIPT_SELECTOR);
             if (!pendingTikz || window.tikzJaxFailed) return;

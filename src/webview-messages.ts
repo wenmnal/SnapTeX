@@ -1,5 +1,11 @@
 import type { PatchPayload } from './types';
 
+/**
+ * Typed message contract between the extension host and the webview.
+ *
+ * panel.ts validates incoming webview messages with isWebviewToExtensionMessage
+ * before dispatching commands. Outgoing messages are typed at compile time.
+ */
 export const WebviewToExtensionCommand = {
     WebviewLoaded: 'webviewLoaded',
     RevealLine: 'revealLine',

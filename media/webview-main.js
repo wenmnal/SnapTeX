@@ -573,7 +573,6 @@ var SnapTeXWebview = (() => {
     getTopZIndex() {
       return ++this.zIndexCounter;
     }
-    // Notify all tooltips of mouse moves (for drag/resize)
     broadcastMouseMove(e) {
     }
     broadcastMouseUp() {
@@ -669,7 +668,6 @@ var SnapTeXWebview = (() => {
         this.manager.activeTransientTooltip = null;
       }
     }
-    // --- Drag Logic ---
     startDrag(e) {
       this.isDragging = true;
       this.ensureAbsolutePosition();
@@ -685,7 +683,6 @@ var SnapTeXWebview = (() => {
         startX: e.clientX,
         startY: e.clientY,
         startWidth: rect.width,
-        // Using rect.width is safer with border-box
         startHeight: rect.height,
         dirX,
         dirY
@@ -726,7 +723,6 @@ var SnapTeXWebview = (() => {
       this.resizeState = null;
       this.element.style.cursor = "";
     }
-    // --- Show/Hide Logic ---
     scheduleShow(link) {
       this.clearHideTimer();
       if (this.currentLink === link && this.element.classList.contains("visible")) return;
@@ -1300,7 +1296,6 @@ var SnapTeXWebview = (() => {
       if (activated === 0) return;
       await this.waitForTikzBatch(containers);
     }
-    // Manually trigger TikZJax to scan the document
     triggerTikzRendering() {
       const pendingTikz = this.contentRoot.querySelector(TIKZ_SCRIPT_SELECTOR);
       if (!pendingTikz || window.tikzJaxFailed) return;
