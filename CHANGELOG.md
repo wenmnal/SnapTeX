@@ -20,6 +20,7 @@ All notable changes to the "SnapTeX" extension will be documented in this file.
 - **Changed**: Replaced fragile manual `scrollY` compensation in experimental block virtualization with a larger directional preload window and delayed cleanup of far-offscreen mounted blocks, making upward scrolling smoother while preserving most memory savings.
 - **Changed**: Kept only above-viewport virtualized shells height-locked during hydration, while visible mounted shells release estimated heights so real DOM controls spacing between visible blocks.
 - **Changed**: Smoothed editor-to-preview auto-scroll by skipping layout waits for already mounted targets and reducing the small-distance skip threshold.
+- **Changed**: Simplified virtual shell mounting by removing an obsolete height-update option and added webview-side hash checks before caching on-demand block HTML.
 - **Changed**: Virtualized full updates can now send block metadata first and request block HTML on demand only when a shell needs to mount, reducing initial DOM/HTML/PDF/TikZ memory for long previews while keeping the existing non-virtualized payload paths as fallbacks.
 
 ## [0.5.13] - 2026-05-14

@@ -1,7 +1,7 @@
 # SnapTeX Optimization TODO
 
 > Current branch: `dev`  
-> Last verified: `npm test` passed with 57 tests after editor-to-preview auto-scroll smoothing.
+> Last verified: `npm test` passed with 57 tests after virtual shell cleanup and on-demand block HTML hash hardening.
 > Rule for future work: keep each change block small, add or update tests before behavior changes, then run `npm test` and commit only the files for that block.
 
 ## Overall Goal
@@ -42,6 +42,8 @@
 - [x] Stabilize upward virtual scrolling with direction-aware preloading and delayed far-offscreen cleanup.
 - [x] Keep above-viewport virtual shells height-locked so hydration does not change document height during upward scrolling.
 - [x] Release fixed shell heights for visible mounted blocks so shell estimates do not affect spacing between rendered blocks.
+- [x] Remove the obsolete virtual shell `forceHeightUpdate` option after visible/above-viewport height behavior became explicit.
+- [x] Check the current shell hash before caching on-demand block HTML in the webview.
 - [x] Keep existing full block payload and `update_binary` paths as fallbacks while the experimental path is off.
 
 ### Correctness and Safety Quick Wins

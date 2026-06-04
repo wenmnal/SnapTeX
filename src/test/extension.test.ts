@@ -882,6 +882,8 @@ suite('PDF request validation', () => {
         assert.match(webviewSource, /vscode\.postMessage\(\{ command: 'requestBlockHtml', id, index, hash \}\)/);
         assert.match(webviewSource, /case 'blockHtml':/);
         assert.match(webviewSource, /parseBlockHtml\(html\)/);
+        assert.match(webviewSource, /const shellHash = shell\.getAttribute\('data-block-hash'\) \|\| ''/);
+        assert.match(webviewSource, /if \(hash && shellHash && shellHash !== hash\) return null/);
         assert.match(webviewSource, /callbacks: requestOptions\.onLoaded \? \[requestOptions\.onLoaded\] : \[\]/);
         assert.match(webviewSource, /pending\.callbacks\.push\(requestOptions\.onLoaded\)/);
         assert.match(webviewSource, /this\.smartFullUpdateFromBlocks\(payload\.htmls, payload\.preserveUnchangedBlocks !== false\)/);
@@ -1024,11 +1026,11 @@ suite('Webview resource loading', () => {
         assert.match(webviewSource, /unmountShell\(shell\)/);
         assert.match(webviewSource, /lockShellHeight\(shell, height\)/);
         assert.match(webviewSource, /unlockShellHeight\(shell\)/);
-        assert.match(webviewSource, /refreshMountedShellHeight\(shell, options = \{\}\)/);
+        assert.match(webviewSource, /refreshMountedShellHeight\(shell\)/);
         assert.match(webviewSource, /isShellAboveViewport\(shell\)/);
         assert.match(webviewSource, /if \(this\.isShellAboveViewport\(shell\)\) \{\s*this\.lockShellHeight\(shell, reservedHeight\);\s*\} else \{\s*this\.unlockShellHeight\(shell\);\s*\}/);
         assert.match(webviewSource, /if \(this\.isShellAboveViewport\(shell\)\) \{\s*this\.lockShellHeight\(shell, height\);\s*\} else \{\s*this\.unlockShellHeight\(shell\);\s*\}/);
-        assert.match(webviewSource, /forceHeightUpdate/);
+        assert.doesNotMatch(webviewSource, /forceHeightUpdate/);
         assert.match(webviewSource, /shell\.style\.height = ''/);
         assert.match(webviewSource, /shell\.style\.minHeight = ''/);
         assert.match(styleSource, /\.latex-block-shell\s*\{[\s\S]*overflow: hidden;/);
@@ -1059,7 +1061,7 @@ suite('Webview resource loading', () => {
         assert.match(webviewSource, /document\.addEventListener\('click', event => this\.onInternalLinkClick\(event\)\)/);
         assert.match(webviewSource, /async ensureAnchorMounted\(anchorId\)/);
         assert.match(webviewSource, /this\.virtualization\.findShellByAnchorId\(anchorId\)/);
-        assert.match(webviewSource, /await this\.ensureShellMounted\(shell, \{ forceHeightUpdate: true \}\)/);
+        assert.match(webviewSource, /await this\.ensureShellMounted\(shell\)/);
         assert.match(webviewSource, /async onInternalLinkClick\(event\)/);
         assert.match(webviewSource, /event\.preventDefault\(\)/);
         assert.match(webviewSource, /await this\.ensureAnchorMounted\(anchorId\)/);
@@ -1079,7 +1081,7 @@ suite('Webview resource loading', () => {
         assert.match(webviewSource, /this\.scrollCommandSeq = 0/);
         assert.match(webviewSource, /async ensureBlockMountedByIndex\(index\)/);
         assert.match(webviewSource, /if \(target\) return \{ target, mounted: false \}/);
-        assert.match(webviewSource, /const block = await this\.ensureShellMounted\(shell, \{ forceHeightUpdate: true \}\)/);
+        assert.match(webviewSource, /const block = await this\.ensureShellMounted\(shell\)/);
         assert.match(webviewSource, /return \{ target: block \|\| shell, mounted: Boolean\(block\) \}/);
         assert.match(webviewSource, /async executeScroll\(data\)/);
         assert.match(webviewSource, /const scrollSeq = \+\+this\.scrollCommandSeq/);
