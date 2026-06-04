@@ -1,7 +1,7 @@
 # SnapTeX Optimization TODO
 
 > Current branch: `dev`  
-> Last verified: `npm test` passed with 54 tests after virtualized anchor, tooltip, forward-sync, and directional preloading fixes.
+> Last verified: `npm test` passed with 56 tests after comment-only block cleanup and standalone comment-line rendering fixes.
 > Rule for future work: keep each change block small, add or update tests before behavior changes, then run `npm test` and commit only the files for that block.
 
 ## Overall Goal
@@ -71,6 +71,10 @@
 - [x] Fix `normalizeUri()` case behavior.
   - Windows/file paths still normalize to lowercase for stable comparisons.
   - Remote/non-file URI paths preserve case.
+- [x] Drop comment-only blocks before rendering.
+  - This prevents long commented-out LaTeX sections from becoming empty preview blocks that still reserve vertical space.
+- [x] Collapse standalone comment lines during preprocessing.
+  - For example, `aaa.`, followed by `% ...` lines, followed by `eee.` renders as `aaa.` then `eee.` without the commented lines.
 
 ### Test Coverage Added
 
@@ -97,8 +101,10 @@
 - [x] `LatexDocument` source mapping.
   - Multi-file `\input` mapping from flattened lines back to original files.
   - Bibliography loading relative to root document.
+  - Comment-only blocks are dropped before rendering.
 - [x] `SmartRenderer`.
   - No nested `.latex-block` classes.
+  - Standalone comment lines do not leave blank preview gaps.
   - Registered rule priority order.
   - Patch payload for localized edits.
   - Full render when macros change.

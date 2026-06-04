@@ -358,6 +358,54 @@ suite('LatexDocument source mapping', () => {
         assert.equal(result.blockTexts.length, 1);
     });
 
+    test('drops comment-only blocks without leaving preview gaps', async () => {
+        const mainUri = vscode.Uri.file('/project/main.tex');
+        const provider = new MemoryFileProvider(new Map([
+            [normalizeUri(mainUri), [
+                '\\begin{document}',
+                'Before the active derivation.',
+                '',
+                '%A direct approach is to incorporate CV within the model estimation step.',
+                '%\\begin{align}\\label{eq:commented}',
+                '%    x = y',
+                '%\\end{align}',
+                '%More commented explanation.',
+                '',
+                'Notice that this paragraph should follow without a blank preview block.',
+                '',
+                '\\begin{align}',
+                'x &= y \\label{eq:real}',
+                '\\end{align}',
+                '%\\begin{equation*}',
+                '%    z = 1',
+                '%\\end{equation*}',
+                'In Eq.~\\eqref{eq:real}, the real paragraph should remain.',
+                '\\end{document}'
+            ].join('\n')]
+        ]));
+        const doc = new LatexDocument(provider);
+
+        const result = await doc.parse(mainUri);
+        doc.applyResult(result);
+        const html = new SmartRenderer(provider).render(doc).htmls?.join('') ?? '';
+        const withoutComments = (text: string) => text
+            .split(/\r?\n/)
+            .map(line => {
+                const commentStart = line.search(/(?<!\\)%/);
+                return commentStart === -1 ? line : line.substring(0, commentStart);
+            })
+            .join('\n')
+            .trim();
+
+        assert.ok(result.blockTexts.every(block => withoutComments(block).length > 0));
+        assert.ok(result.blockTexts.some(block => block.includes('Notice that this paragraph')));
+        assert.ok(result.blockTexts.some(block => block.includes('In Eq.~\\eqref{eq:real}')));
+        assert.doesNotMatch(result.blockTexts.join('\n'), /eq:commented/);
+        assert.match(html, /Notice that this paragraph/);
+        assert.match(html, /In Eq\./);
+        assert.doesNotMatch(html, /eq:commented|%\\begin|<div class="latex-block"[^>]*>\s*<\/div>/);
+    });
+
     test('inlines standalone TikZ inputs without treating their document end as the root end', async () => {
         const mainUri = vscode.Uri.file('/project/main.tex');
         const figureUri = vscode.Uri.file('/project/figures/fold_illus_reliever.tex');
@@ -438,6 +486,21 @@ suite('SmartRenderer', () => {
         assert.doesNotMatch(html, /class="latex-block figure/);
         assert.doesNotMatch(html, /class="latex-block table/);
         assert.doesNotMatch(html, /class="latex-block algorithm/);
+    });
+
+    test('removes standalone comment lines without creating blank preview gaps', () => {
+        const html = renderBlocks([
+            [
+                'aaa.',
+                '% bbb',
+                '    % ccc',
+                '% ddd',
+                'eee.'
+            ].join('\n')
+        ]);
+
+        assert.match(html, /aaa\.\neee\./);
+        assert.doesNotMatch(html, /bbb|ccc|ddd|<div class="latex-block"[^>]*>\s*<\/div>/);
     });
 
     test('keeps registered preprocess rules sorted by priority', () => {
