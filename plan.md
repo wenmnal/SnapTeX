@@ -1,7 +1,7 @@
 # SnapTeX Optimization TODO
 
 > Current branch: `dev`  
-> Last verified: `npm test` passed with 43 tests after adding block-text hashes for DOM diff preservation.
+> Last verified: `npm test` passed with 44 tests after adding far-offscreen PDF canvas bitmap release.
 > Rule for future work: keep each change block small, add or update tests before behavior changes, then run `npm test` and commit only the files for that block.
 
 ## Overall Goal
@@ -120,7 +120,7 @@
 - [x] 2. Add `blockHash = hash(blockText)` for structural block identity.
   - Do not include numbering, references, PDF/TikZ runtime state, or generated DOM in the hash.
   - Keep numbering/reference updates on the existing `payload.numbering -> applyNumbering()` path.
-- [ ] 3. Release far-offscreen PDF canvas bitmaps and rerender them when they return near the viewport.
+- [x] 3. Release far-offscreen PDF canvas bitmaps and rerender them when they return near the viewport.
 - [ ] 4. Start the full-update payload transition with a low-risk block payload path.
 - [ ] 5. Prepare shell-based block virtualization without turning it on globally.
 - [ ] 6. Split or strengthen tests where the current monolithic suite is making changes risky.
@@ -236,7 +236,7 @@
 - [x] Request viewport-near PDF canvases immediately instead of waiting for an observer scroll event.
 - [x] Disable PDF.js range/stream/auto-fetch loading for webview resource URIs to avoid slow request probing.
 - [x] Create a blob module worker for PDF.js so PDF rendering does not fall back to the slow fake worker path.
-- [ ] Release far-offscreen PDF canvas bitmaps.
+- [x] Release far-offscreen PDF canvas bitmaps.
 - [ ] Add webview-side tests or smoke coverage that verifies URI PDF rendering in local, remote, and web extension hosts where practical.
 
 ### E. Full Update Payload and DOM Update Model

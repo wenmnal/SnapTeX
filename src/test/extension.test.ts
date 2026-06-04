@@ -601,6 +601,21 @@ suite('PDF request validation', () => {
         assert.match(webviewSource, /pdfjsLib\.GlobalWorkerOptions\.workerPort = worker/);
         assert.match(webviewSource, /await pdfWorkerReady/);
     });
+
+    test('releases far-offscreen PDF canvas bitmaps while preserving layout for rerender', () => {
+        const repoRoot = path.resolve(__dirname, '..', '..');
+        const webviewSource = fs.readFileSync(path.join(repoRoot, 'media', 'webview.html'), 'utf8');
+
+        assert.match(webviewSource, /const PDF_RELEASE_MARGIN = 3600/);
+        assert.match(webviewSource, /isPdfCanvasFarFromViewport\(canvas\)/);
+        assert.match(webviewSource, /releasePdfCanvasBitmap\(canvas\)/);
+        assert.match(webviewSource, /canvas\.style\.height = `\$\{Math\.ceil\(rect\.height\)\}px`/);
+        assert.match(webviewSource, /canvas\.width = 0/);
+        assert.match(webviewSource, /canvas\.height = 0/);
+        assert.match(webviewSource, /canvas\.setAttribute\('data-pdf-released', 'true'\)/);
+        assert.match(webviewSource, /canvas\.removeAttribute\('data-rendered'\)/);
+        assert.match(webviewSource, /canvas\.removeAttribute\('data-pdf-released'\)/);
+    });
 });
 
 suite('Webview resource loading', () => {
