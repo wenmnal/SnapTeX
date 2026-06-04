@@ -389,19 +389,12 @@ export class TexPreviewPanel {
             logHostMemory('after render');
             this._currentDocument.releaseTextContent();
 
-            if (payload.type === 'full' && payload.htmls) {
+            if (payload.htmls) {
                 payload.htmls = payload.htmls.map(h => this.fixHtmlPaths(h));
-                logHostMemory('after fixPaths/fullBlocks');
-                this._panel.webview.postMessage({ command: 'update', payload });
-                logHostMemory('after postMessage');
-            } else {
-                if (payload.type === 'patch' && payload.htmls) {
-                    payload.htmls = payload.htmls.map(h => this.fixHtmlPaths(h));
-                }
-                logHostMemory('after fixPaths');
-                this._panel.webview.postMessage({ command: 'update', payload });
-                logHostMemory('after postMessage');
             }
+            logHostMemory('after fixPaths');
+            this._panel.webview.postMessage({ command: 'update', payload });
+            logHostMemory('after postMessage');
         }
     }
 

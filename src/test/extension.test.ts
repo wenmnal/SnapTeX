@@ -868,7 +868,7 @@ suite('PDF request validation', () => {
         const panelSource = fs.readFileSync(path.join(repoRoot, 'src', 'panel.ts'), 'utf8');
         const webviewSource = fs.readFileSync(path.join(repoRoot, 'media', 'webview.html'), 'utf8');
 
-        assert.match(panelSource, /payload\.htmls = payload\.htmls\.map\(h => this\.fixHtmlPaths\(h\)\)/);
+        assert.match(panelSource, /if \(payload\.htmls\) \{\s*payload\.htmls = payload\.htmls\.map\(h => this\.fixHtmlPaths\(h\)\)/);
         assert.match(panelSource, /this\._renderer\.render\(this\._currentDocument, \{ deferFullHtml: virtualizeBlocks \}\)/);
         assert.match(panelSource, /message\.command === 'requestBlockHtml'/);
         assert.match(panelSource, /command: 'blockHtml'/);
