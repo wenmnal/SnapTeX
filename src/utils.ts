@@ -70,11 +70,13 @@ export function escapeHtml(text: string): string {
  */
 export function resolveLatexStyles(text: string): string {
     // 1. Standard styles: \textbf{...}, \textit{...}, etc.
-    text = text.replace(/\\(textbf|textit|texttt|textsf|textrm|underline)\{((?:[^{}]|{[^{}]*})*)\}/g, (match, cmd, content) => {
+    text = text.replace(/\\(textbf|textit|emph|texttt|textsf|textrm|underline)\{((?:[^{}]|{[^{}]*})*)\}/g, (match, cmd, content) => {
         let startTag = '', endTag = '';
         switch (cmd) {
             case 'textbf': startTag = '<strong>'; endTag = '</strong>'; break;
-            case 'textit': startTag = '<em>'; endTag = '</em>'; break;
+            case 'textit':
+            case 'emph':
+                startTag = '<em>'; endTag = '</em>'; break;
             case 'texttt': startTag = '<code>'; endTag = '</code>'; break;
             case 'textsf': startTag = '<span style="font-family: sans-serif; font-size: 0.85em;">'; endTag = '</span>'; break;
             case 'textrm': startTag = '<span style="font-family: serif;">'; endTag = '</span>'; break;
@@ -103,6 +105,9 @@ export function resolveLatexStyles(text: string): string {
     });
     // Handle \color{name}{content}
     text = text.replace(/\\color\{([a-zA-Z]+)\}\{([^}]*)\}/g, (match, color, content) => {
+        return applyStyleToTexList(`<span style="color: ${color}">`, '</span>', content);
+    });
+    text = text.replace(/\\textcolor\{([a-zA-Z0-9]+)\}\{((?:[^{}]|{[^{}]*})*)\}/g, (match, color, content) => {
         return applyStyleToTexList(`<span style="color: ${color}">`, '</span>', content);
     });
 

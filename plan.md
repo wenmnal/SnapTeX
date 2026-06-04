@@ -173,8 +173,8 @@
 
 ### A. Remaining Correctness and Security
 
-- [ ] Add direct tests for `postProcessHtml()` abstract/keywords handling.
-- [ ] Add tests for reference/citation rendering edge cases.
+- [x] Add direct tests for `postProcessHtml()` abstract/keywords handling.
+- [x] Add tests for reference/citation rendering edge cases.
   - Multiple labels in one `\ref{a,b}`.
   - Missing references.
   - `\eqref`.
@@ -307,9 +307,9 @@
 
 ### G. Architecture Refactoring
 
-- [ ] Introduce a narrow `RenderContext` interface.
-- [ ] Remove the `rules.ts -> SmartRenderer` import.
-- [ ] Replace `PreprocessRule.apply(..., renderer: any)` with `RenderContext`.
+- [x] Introduce a narrow `RenderContext` interface.
+- [x] Remove the `rules.ts -> SmartRenderer` import.
+- [x] Replace `PreprocessRule.apply(..., renderer: any)` with `RenderContext`.
 - [ ] Split `rules.ts` into modules.
   - math.
   - refs.

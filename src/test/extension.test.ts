@@ -11,6 +11,7 @@ import { IFileProvider } from '../file-provider';
 import { extractMetadata } from '../metadata';
 import { isUriWithinAllowedRoots, normalizePdfRequestPath } from '../panel';
 import { ProtectionManager } from '../protection';
+import { postProcessHtml } from '../rules';
 import { LatexCounterScanner } from '../scanner';
 import { LatexBlockSplitter } from '../splitter';
 import { SmartRenderer } from '../renderer';
@@ -303,6 +304,20 @@ suite('LaTeX style utilities', () => {
         assert.match(cleaned, /<b>Bold<\/b>/);
         assert.match(protector.resolve(cleaned), /<span>math<\/span>/);
     });
+
+    test('post-processes abstract and keyword sentinel blocks', () => {
+        const html = postProcessHtml([
+            '<p>OOABSTRACT_STARTOO</p>',
+            '<p>This is the abstract.</p>',
+            '<p>OOABSTRACT_ENDOO</p>',
+            '<p>OOKEYWORDS_STARTOOalpha; betaOOKEYWORDS_ENDOO</p>'
+        ].join(''));
+
+        assert.match(html, /<div class="latex-abstract"><span class="latex-abstract-title">Abstract<\/span>/);
+        assert.match(html, /<p>This is the abstract\.<\/p><\/div>/);
+        assert.match(html, /<div class="latex-keywords"><strong>Keywords:<\/strong> alpha; beta<\/div>/);
+        assert.doesNotMatch(html, /OOABSTRACT|OOKEYWORDS/);
+    });
 });
 
 suite('LatexDocument source mapping', () => {
@@ -521,6 +536,34 @@ suite('SmartRenderer', () => {
         assert.doesNotMatch(html, /class="latex-block algorithm/);
     });
 
+    test('renders tabularx tables with booktabs and colored captions', () => {
+        const html = renderBlocks([
+            [
+                '\\begin{table}[!ht]',
+                '\\centering',
+                '\\caption{\\textcolor{red}{Summary of loss notation. Here, $\\ell$ denotes individual loss.}}',
+                '\\label{tab:notation_loss}',
+                '\\begin{tabularx}{\\textwidth}{llX}',
+                '\\toprule',
+                '\\textbf{Notation} & \\textbf{Definition} & \\textbf{Description} \\\\',
+                '\\midrule',
+                '$\\ell(\\z_i; \\f)$ & -- & {Individual} loss of model $\\f$ at index $i$. \\\\',
+                '$\\overline{\\ell}_i(\\f)$ & $\\Ebb[\\ell(\\z_i; \\f)]$ & Expected {individual} loss of \\emph{fixed} model $\\f$ at index $i$. \\\\',
+                '\\bottomrule',
+                '\\end{tabularx}',
+                '\\end{table}'
+            ].join('\n')
+        ]);
+
+        assert.match(html, /class="latex-table"/);
+        assert.match(html, /id="tab:notation_loss"/);
+        assert.match(html, /<span style="color: red">Summary of loss notation/);
+        assert.match(html, /<table[^>]*>/);
+        assert.match(html, /<strong>Notation<\/strong>/);
+        assert.match(html, /<td[^>]*>Expected \{individual\} loss of <em>fixed<\/em> model/);
+        assert.doesNotMatch(html, /\\begin\{tabularx\}|\\toprule|\\bottomrule/);
+    });
+
     test('removes standalone comment lines without creating blank preview gaps', () => {
         const html = renderBlocks([
             [
@@ -555,6 +598,16 @@ suite('SmartRenderer', () => {
         assert.equal(payload.type, 'full');
         assert.ok(payload.htmls?.[0].includes('xAB'));
         assert.ok(!payload.htmls?.[0].includes('xBA'));
+    });
+
+    test('keeps preprocess rules behind a narrow render context', () => {
+        const repoRoot = path.resolve(__dirname, '..', '..');
+        const rulesSource = fs.readFileSync(path.join(repoRoot, 'src', 'rules.ts'), 'utf8');
+        const typesSource = fs.readFileSync(path.join(repoRoot, 'src', 'types.ts'), 'utf8');
+
+        assert.doesNotMatch(rulesSource, /from '\.\/renderer'/);
+        assert.match(typesSource, /export interface RenderContext/);
+        assert.match(typesSource, /apply: \(text: string, renderer: RenderContext\) => string/);
     });
 
     test('returns patch payloads for small localized edits', () => {
@@ -683,6 +736,30 @@ suite('SmartRenderer', () => {
         assert.match(html, /data-req-path="figures\/result\.pdf"/);
         assert.match(html, /data-key="sec:intro"/);
         assert.equal(html.match(/class="latex-block/g)?.length ?? 0, 2);
+    });
+
+    test('renders reference and citation edge cases', () => {
+        const doc = createDocument([
+            [
+                '\\section{Intro}\\label{sec:intro}',
+                'See \\ref{sec:intro,fig:missing}, Eq.~\\eqref{eq:one}, \\citep[see][p. 2]{smith2024,doe2025}, \\citet{smith2024}, and \\citeyear{doe2025}.'
+            ].join('\n'),
+            '\\begin{equation}\\label{eq:one}x=1\\end{equation}'
+        ]);
+        doc.bibEntries = new Map([
+            ['smith2024', { key: 'smith2024', type: 'article', fields: { author: 'Smith, Jane', year: '2024', title: 'A Paper' } }],
+            ['doe2025', { key: 'doe2025', type: 'article', fields: { author: 'Doe, John', year: '2025', title: 'Another Paper' } }]
+        ]);
+        const renderer = new SmartRenderer(new MemoryFileProvider());
+        const payload = renderer.render(doc);
+        const html = payload.htmls?.join('') ?? '';
+
+        assert.match(html, /href="#sec:intro"[^>]*data-key="sec:intro"[^>]*>\?<\/a>/);
+        assert.match(html, /href="#fig:missing"[^>]*data-key="fig:missing"[^>]*>\?<\/a>/);
+        assert.match(html, /Eq\.&nbsp;\(<a href="#eq:one"[^>]*data-key="eq:one"[^>]*>\?<\/a>\)/);
+        assert.match(html, /\(see <a href="#ref-smith2024"[^>]*>Smith, 2024<\/a>; <a href="#ref-doe2025"[^>]*>Doe, 2025<\/a>, p\. 2\)/);
+        assert.match(html, /Smith \(<a href="#ref-smith2024"[^>]*>2024<\/a>\)/);
+        assert.match(html, /and <a href="#ref-doe2025"[^>]*>2025<\/a>/);
     });
 
     test('unwraps resizebox around protected tikz figures', () => {
