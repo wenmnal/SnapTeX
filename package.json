@@ -132,7 +132,7 @@
         "snaptex.experimentalVirtualization": {
           "type": "boolean",
           "default": false,
-          "description": "Prepare experimental block shell virtualization plumbing. Disabled by default."
+          "description": "Enable experimental block shell virtualization for lower memory usage on long previews. Reload or reopen the SnapTeX preview after changing this setting."
         }
       }
     }
