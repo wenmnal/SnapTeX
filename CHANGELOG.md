@@ -2,6 +2,16 @@
 
 All notable changes to the "SnapTeX" extension will be documented in this file.
 
+## [0.5.14] - 2026-06-04
+- **Fixed**: Corrected renderer block structure issues, including nested `.latex-block` output in floats, TikZ block splitting at blank lines, protected final environment flushing, starred float numbering, preprocess rule priority ordering, spaced `\label {key}` parsing, and URI normalization for remote paths.
+- **Security**: Hardened preview sync/PDF request handling and escaped `\maketitle` title, author, and date metadata before inserting it into webview HTML.
+- **Added**: Expanded the core test suite for diffing, splitting, counters, BibTeX parsing, metadata extraction, protection tokens, URI normalization, renderer behavior, PDF request validation, TikZ loading, and long-document smoke coverage.
+- **Added**: Memory instrumentation and update coalescing for extension-host rendering and webview DOM/PDF/TikZ stats.
+- **Changed**: Switched PDF rendering to a URI-only pipeline with PDF.js URL loading, non-streaming webview resource requests, a real blob module worker, viewport-near lazy rendering, and far-offscreen canvas bitmap release.
+- **Changed**: Reworked TikZ rendering to lazy-load TikZJax, bootstrap worker assets through blob URLs, cache runtime resources for the webview session, prune unused TikZ libraries per picture, preserve stale SVGs while rerendering, surface compile failures cleanly, add watchdogs, and coalesce edit-triggered render batches.
+- **Changed**: Improved full-update behavior with block text hashes, block-list full payloads, per-block path fixing, and DOM preservation for unchanged blocks while keeping the existing fixed full-update threshold.
+- **Added**: Prepared disabled block virtualization plumbing behind `snaptex.experimentalVirtualization`, including a webview controller and block height cache for future shell-based mounting.
+
 ## [0.5.13] - 2026-05-14
 - **Added**: clean_layout_cmds rule to preprocess layout commands and no-indent markers
 - **Enhanced**: thm/defi/assu/prop/... environments handling with dynamic counter management
