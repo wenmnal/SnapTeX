@@ -44,6 +44,10 @@ interface TextRange {
     end: number;
 }
 
+interface DefinitionRecord extends TextRange {
+    fullDef: string;
+}
+
 function skipWhitespace(text: string, index: number): number {
     let i = index;
     while (i < text.length && /\s/.test(text[i])) { i++; }
@@ -134,6 +138,44 @@ function blankOutRanges(text: string, ranges: TextRange[]): string {
     return result;
 }
 
+function collectDefinitions(text: string): DefinitionRecord[] {
+    const records: DefinitionRecord[] = [];
+    const defRegex = /\\(provide|re)?(newcommand|def|gdef|DeclareMathOperator|usetikzlibrary|tikzset|definecolor)(\*?)/g;
+
+    let defMatch;
+    while ((defMatch = defRegex.exec(text)) !== null) {
+        const start = defMatch.index;
+        const end = findDefinitionEnd(text, start + defMatch[0].length);
+        if (end === -1) { continue; }
+
+        records.push({ start, end, fullDef: text.substring(start, end) });
+        defRegex.lastIndex = end;
+    }
+
+    return records;
+}
+
+function extractKatexMacro(fullDef: string): { name: string; definition: string } | undefined {
+    const match = /\\(newcommand|renewcommand|def|gdef|DeclareMathOperator)(\*?)\s*\{?(\\[a-zA-Z0-9]+)\}?(?:\[(\d+)\])?/.exec(fullDef);
+    if (!match) { return undefined; }
+
+    const cmdType = match[1];
+    const star = match[2];
+    const name = match[3];
+    const bodyStart = fullDef.indexOf('{', match.index + match[0].length);
+    if (bodyStart === -1) { return undefined; }
+
+    const bodyEnd = findBalancedClosingBrace(fullDef, bodyStart);
+    if (bodyEnd === -1) { return undefined; }
+
+    const rawDefinition = fullDef.substring(bodyStart + 1, bodyEnd).trim();
+    const definition = cmdType === 'DeclareMathOperator'
+        ? (star === '*' ? `\\operatorname*{${rawDefinition}}` : `\\operatorname{${rawDefinition}}`)
+        : rawDefinition;
+
+    return { name, definition };
+}
+
 export function extractMetadata(text: string): MetadataResult {
     // 1. Pre-cleaning: Remove comment content but KEEP the % marker.
     // Why? If we remove the whole line, we might create double newlines (\n\n) which split blocks incorrectly.
@@ -174,77 +216,38 @@ export function extractMetadata(text: string): MetadataResult {
         cleanedText = cleanedText.substring(0, dateRes.start) + cleanedText.substring(dateRes.end + 1);
     }
 
-    // --- Split Extraction Logic ---
     const tikzGlobalParts: string[] = [];
     const tikzMacroMap = new Map<string, string>();
-    const definitionRanges: TextRange[] = [];
+    const macros: Record<string, string> = {};
 
-    // Regex to capture ALL definitions (Global & Macros)
-    const defRegex = /\\(provide|re)?(newcommand|def|gdef|DeclareMathOperator|usetikzlibrary|tikzset|definecolor)(\*?)/g;
+    const definitionRecords = collectDefinitions(cleanedText);
+    for (const record of definitionRecords) {
+        const { fullDef } = record;
 
-    let defMatch;
-    while ((defMatch = defRegex.exec(cleanedText)) !== null) {
-        const startIdx = defMatch.index;
-        const endIdx = findDefinitionEnd(cleanedText, startIdx + defMatch[0].length);
+        if (/\\(usetikzlibrary|tikzset|definecolor)/.test(fullDef)) {
+            if (!tikzGlobalParts.includes(fullDef)) {
+                tikzGlobalParts.push(fullDef);
+            }
+            continue;
+        }
 
-        if (endIdx !== -1) {
-             const fullDef = cleanedText.substring(startIdx, endIdx);
-             definitionRanges.push({ start: startIdx, end: endIdx });
-             defRegex.lastIndex = endIdx;
+        let finalDef = fullDef;
+        if (/\\(provide|re)?newcommand/.test(fullDef)) {
+            finalDef = transpileToDef(fullDef);
+        }
 
-             // Check type
-             if (/\\(usetikzlibrary|tikzset|definecolor)/.test(fullDef)) {
-                 // 1. Global Settings -> Always Keep
-                 if (!tikzGlobalParts.includes(fullDef)) {
-                     tikzGlobalParts.push(fullDef);
-                 }
-             } else {
-                 // 2. Macros -> Store in Map for On-Demand Injection
-                 let finalDef = fullDef;
-                 if (/\\(provide|re)?newcommand/.test(fullDef)) {
-                     finalDef = transpileToDef(fullDef);
-                 }
+        const tikzName = extractMacroName(finalDef);
+        if (tikzName && !tikzMacroMap.has(tikzName)) {
+            tikzMacroMap.set(tikzName, finalDef);
+        }
 
-                 const name = extractMacroName(finalDef);
-                 if (name && !tikzMacroMap.has(name)) {
-                     tikzMacroMap.set(name, finalDef);
-                 }
-             }
+        const katexMacro = extractKatexMacro(fullDef);
+        if (katexMacro) {
+            macros[katexMacro.name] = katexMacro.definition;
         }
     }
 
     const tikzGlobal = tikzGlobalParts.join('\n');
-
-    // Extract KaTeX Macros (Existing Logic)
-    const macros: Record<string, string> = {};
-    const macroRegex = /\\(newcommand|renewcommand|def|gdef|DeclareMathOperator)(\*?)\s*\{?(\\[a-zA-Z0-9]+)\}?(?:\[(\d+)\])?/g;
-    let match;
-    while ((match = macroRegex.exec(cleanedText)) !== null) {
-        const cmdType = match[1];
-        const star = match[2];
-        const cmdName = match[3];
-        const matchEndIndex = match.index + match[0].length;
-        let openBraces = 0, contentStartIndex = -1, contentEndIndex = -1, foundStart = false;
-
-        for (let i = matchEndIndex; i < cleanedText.length; i++) {
-            const char = cleanedText[i];
-            if (char === '{') {
-                if (!foundStart) { contentStartIndex = i + 1; foundStart = true; }
-                openBraces++;
-            } else if (char === '}') {
-                openBraces--;
-                if (foundStart && openBraces === 0) { contentEndIndex = i; break; }
-            }
-        }
-        if (contentStartIndex !== -1 && contentEndIndex !== -1) {
-            const definition = cleanedText.substring(contentStartIndex, contentEndIndex).trim();
-            if (cmdType === 'DeclareMathOperator') {
-                macros[cmdName] = star === '*' ? `\\operatorname*{${definition}}` : `\\operatorname{${definition}}`;
-            } else {
-                macros[cmdName] = definition;
-            }
-        }
-    }
-    cleanedText = blankOutRanges(cleanedText, definitionRanges);
+    cleanedText = blankOutRanges(cleanedText, definitionRecords);
     return { data: { macros, tikzGlobal, tikzMacroMap, title, author, date }, cleanedText };
 }

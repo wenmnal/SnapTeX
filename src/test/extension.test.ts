@@ -1483,6 +1483,7 @@ suite('Metadata extraction', () => {
             '\\author{Ada}',
             '\\date{\\today}',
             '\\newcommand{\\vect}[1]{\\mathbf{#1}}',
+            '\\renewcommand{\\oldmacro}{\\mathrm{o}}',
             '\\DeclareMathOperator{\\rank}{rank}',
             '\\usetikzlibrary{arrows.meta}',
             '\\tikzset{box/.style={draw}}',
@@ -1498,11 +1499,13 @@ suite('Metadata extraction', () => {
         assert.equal(result.data.author, 'Ada');
         assert.ok(result.data.date);
         assert.equal(result.data.macros['\\vect'], '\\mathbf{#1}');
+        assert.equal(result.data.macros['\\oldmacro'], '\\mathrm{o}');
         assert.equal(result.data.macros['\\rank'], '\\operatorname{rank}');
         assert.match(result.data.tikzGlobal, /\\usetikzlibrary\{arrows\.meta\}/);
         assert.match(result.data.tikzGlobal, /\\tikzset\{box\/.style=\{draw\}\}/);
         assert.equal(result.data.tikzMacroMap.get('\\origin'), '\\def\\origin{(0,0)}');
         assert.equal(result.data.tikzMacroMap.get('\\vect'), '\\def\\vect#1{\\mathbf{#1}}');
+        assert.equal(result.data.tikzMacroMap.get('\\oldmacro'), '\\def\\oldmacro{\\mathrm{o}}');
         assert.doesNotMatch(result.cleanedText, /\\title/);
         assert.doesNotMatch(result.cleanedText, /\\author/);
         assert.doesNotMatch(result.cleanedText, /\\newcommand\{\\vect\}/);
