@@ -105,8 +105,7 @@ function createDocument(
 }
 
 function renderBlocks(blockTexts: string[]): string {
-    const provider = new MemoryFileProvider();
-    const renderer = new SmartRenderer(provider);
+    const renderer = new SmartRenderer();
     const payload = renderer.render(createDocument(blockTexts));
     assert.equal(payload.type, 'full');
     assert.ok(payload.htmls);
@@ -564,7 +563,7 @@ suite('LatexDocument source mapping', () => {
 
         const result = await doc.parse(mainUri);
         doc.applyResult(result);
-        const html = new SmartRenderer(provider).render(doc).htmls?.join('') ?? '';
+        const html = new SmartRenderer().render(doc).htmls?.join('') ?? '';
         const blocks = resultBlockTexts(result);
         const withoutComments = (text: string) => text
             .split(/\r?\n/)
@@ -606,7 +605,7 @@ suite('LatexDocument source mapping', () => {
 
         const result = await doc.parse(mainUri);
         doc.applyResult(result);
-        const html = new SmartRenderer(provider).render(doc).htmls?.join('') ?? '';
+        const html = new SmartRenderer().render(doc).htmls?.join('') ?? '';
         const blocks = resultBlockTexts(result);
 
         assert.ok(blocks.some(block => block.includes('First item')));
@@ -643,7 +642,7 @@ suite('LatexDocument source mapping', () => {
         const result = await doc.parse(mainUri);
         doc.applyResult(result);
         const joinedBlocks = resultBlockTexts(result).join('\n');
-        const html = new SmartRenderer(provider).render(doc).htmls?.join('') ?? '';
+        const html = new SmartRenderer().render(doc).htmls?.join('') ?? '';
         const visibleHtml = html.replace(/<script type="text\/snaptex-tikz"[\s\S]*?<\/script>/g, '');
 
         assert.match(joinedBlocks, /After figure should remain/);
@@ -744,8 +743,7 @@ suite('SmartRenderer', () => {
     });
 
     test('keeps registered preprocess rules sorted by priority', () => {
-        const provider = new MemoryFileProvider();
-        const renderer = new SmartRenderer(provider);
+        const renderer = new SmartRenderer();
         renderer.registerPreprocessRule({
             name: 'test-order-second',
             priority: -1000,
@@ -778,7 +776,7 @@ suite('SmartRenderer', () => {
     });
 
     test('returns patch payloads for small localized edits', () => {
-        const renderer = new SmartRenderer(new MemoryFileProvider());
+        const renderer = new SmartRenderer();
         renderer.render(createDocument(['A', 'B', 'C']));
 
         const payload = renderer.render(createDocument(['A', 'B changed', 'C']));
@@ -791,7 +789,7 @@ suite('SmartRenderer', () => {
     });
 
     test('reads only changed block text for localized hash patches', () => {
-        const renderer = new SmartRenderer(new MemoryFileProvider());
+        const renderer = new SmartRenderer();
         renderer.render(createDocument(['A', 'B', 'C']));
 
         const nextDoc = createDocument(['A', 'B changed', 'C']);
@@ -809,7 +807,7 @@ suite('SmartRenderer', () => {
     });
 
     test('updates citation order from cached block metadata without rescanning all text', () => {
-        const renderer = new SmartRenderer(new MemoryFileProvider());
+        const renderer = new SmartRenderer();
         renderer.render(createDocument([
             'See \\cite{smith2024}.',
             'Middle text.',
@@ -837,7 +835,7 @@ suite('SmartRenderer', () => {
     });
 
     test('adds block hashes from block text only and disables hash preservation on macro changes', () => {
-        const renderer = new SmartRenderer(new MemoryFileProvider());
+        const renderer = new SmartRenderer();
         const first = renderer.render(createDocument(['$\\foo$'], { macros: { '\\foo': 'x' } }));
         const next = renderer.render(createDocument(['$\\foo$'], { macros: { '\\foo': 'y' } }));
 
@@ -849,7 +847,7 @@ suite('SmartRenderer', () => {
     });
 
     test('can defer full HTML and render block HTML on demand', () => {
-        const renderer = new SmartRenderer(new MemoryFileProvider());
+        const renderer = new SmartRenderer();
         const payload = renderer.render(createDocument([
             'See Figure~\\ref{fig:a} and \\cite{smith2024}.',
             '\\begin{figure}\\caption{A}\\label{fig:a}\\end{figure}',
@@ -868,7 +866,7 @@ suite('SmartRenderer', () => {
     });
 
     test('escapes maketitle metadata while preserving LaTeX formatting', () => {
-        const renderer = new SmartRenderer(new MemoryFileProvider());
+        const renderer = new SmartRenderer();
         const payload = renderer.render(createDocument(['\\maketitle'], {
             title: '<img src=x onerror=alert(1)> \\textbf{Safe} $x<y$',
             author: 'Ada & Bob',
@@ -886,7 +884,7 @@ suite('SmartRenderer', () => {
     });
 
     test('updates maketitle metadata without exposing raw metadata in block hashes', () => {
-        const renderer = new SmartRenderer(new MemoryFileProvider());
+        const renderer = new SmartRenderer();
         renderer.render(createDocument(['\\maketitle'], { title: 'First' }));
 
         const payload = renderer.render(createDocument(['\\maketitle'], { title: 'Second <tag>' }));
@@ -900,7 +898,7 @@ suite('SmartRenderer', () => {
     });
 
     test('uses full render when a replacement edit exceeds the fixed threshold', () => {
-        const renderer = new SmartRenderer(new MemoryFileProvider());
+        const renderer = new SmartRenderer();
         const oldBlocks = Array.from({ length: 300 }, (_, index) => `Block ${index}`);
         const newBlocks = oldBlocks.map((text, index) => index >= 100 && index < 200 ? `${text} changed` : text);
         renderer.render(createDocument(oldBlocks));
@@ -912,7 +910,7 @@ suite('SmartRenderer', () => {
     });
 
     test('uses full render for very large replacement edits', () => {
-        const renderer = new SmartRenderer(new MemoryFileProvider());
+        const renderer = new SmartRenderer();
         const oldBlocks = Array.from({ length: 300 }, (_, index) => `Block ${index}`);
         const newBlocks = oldBlocks.map((text, index) => index < 220 ? `${text} changed` : text);
         renderer.render(createDocument(oldBlocks));
@@ -924,7 +922,7 @@ suite('SmartRenderer', () => {
     });
 
     test('forces a full render when macros change', () => {
-        const renderer = new SmartRenderer(new MemoryFileProvider());
+        const renderer = new SmartRenderer();
         renderer.render(createDocument(['$\\foo$'], { macros: { '\\foo': 'x' } }));
 
         const payload = renderer.render(createDocument(['$\\foo$'], { macros: { '\\foo': 'y' } }));
@@ -963,7 +961,7 @@ suite('SmartRenderer', () => {
             ['smith2024', { key: 'smith2024', type: 'article', fields: { author: 'Smith, Jane', year: '2024', title: 'A Paper' } }],
             ['doe2025', { key: 'doe2025', type: 'article', fields: { author: 'Doe, John', year: '2025', title: 'Another Paper' } }]
         ]);
-        const renderer = new SmartRenderer(new MemoryFileProvider());
+        const renderer = new SmartRenderer();
         const payload = renderer.render(doc);
         const html = payload.htmls?.join('') ?? '';
 
@@ -997,7 +995,7 @@ suite('SmartRenderer', () => {
     });
 
     test('injects only TikZ libraries used by each picture', () => {
-        const renderer = new SmartRenderer(new MemoryFileProvider());
+        const renderer = new SmartRenderer();
         const doc = createDocument([
             [
                 '\\begin{tikzpicture}',
@@ -1030,7 +1028,7 @@ suite('SmartRenderer', () => {
     });
 
     test('includes TikZ libraries required by used global styles', () => {
-        const renderer = new SmartRenderer(new MemoryFileProvider());
+        const renderer = new SmartRenderer();
         const doc = createDocument([
             [
                 '\\begin{tikzpicture}',
@@ -1061,7 +1059,7 @@ suite('SmartRenderer', () => {
             [normalizeUri(bibUri), '@article{smith2024, title={Fixture Paper}, author={Smith, Jane}, year={2024}}']
         ]);
         const provider = new MemoryFileProvider(files);
-        const renderer = new SmartRenderer(provider);
+        const renderer = new SmartRenderer();
         const firstDoc = new LatexDocument(provider);
         firstDoc.applyResult(await firstDoc.parse(mainUri));
 

@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import { SmartRenderer } from './renderer';
 import { TexPreviewPanel } from './panel';
-import { VscodeFileProvider } from './file-provider';
 import { normalizeUri } from './utils';
 
 // --- Flash Animation Decoration Types ---
@@ -69,8 +68,7 @@ function areUrisEqual(uri1: vscode.Uri, uri2: vscode.Uri): boolean {
 export function activate(context: vscode.ExtensionContext) {
     console.log('[SnapTeX] Activated!');
 
-    const fileProvider = new VscodeFileProvider();
-    const renderer = new SmartRenderer(fileProvider);
+    const renderer = new SmartRenderer();
 
     renderer.reloadAllRules();
 

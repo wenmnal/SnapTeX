@@ -660,12 +660,6 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                             if (contentToRender.startsWith('{') && contentToRender.endsWith('}')) { contentToRender = contentToRender.substring(1, contentToRender.length - 1); }
                         }
 
-                        // Labels inside the algorithmic block are handled here
-                        // We also need to preserve them inside the lines
-                        const lineLabels = recoverPreservedTokens(contentToRender);
-                        // Clean tokens from content to avoid double rendering (though tokens render as tokens, so safe)
-                        // Actually, renderInline will pass tokens through.
-
                         contentToRender = resolveLatexStyles(contentToRender);
                         const renderedContent = renderer.renderInline(contentToRender);
                         const itemClass = isSpecialLine ? "alg-item alg-item-no-marker" : "alg-item";
@@ -730,9 +724,6 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                     notesHtml = `<div class="latex-tablenotes"><ul>${noteItems}</ul></div>`;
                 }
 
-                // Handle \makecell ... (omitted standard logic for brevity, assuming standard processing)
-                // ... (For simplicity, we assume innerContent is mostly the tabular now)
-
                 let tableHtml = '';
                 // Locate tabular
                 const beginRegex = /\\begin\{(tabular\*?|tabularx)\}/g;
@@ -742,7 +733,6 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 if (beginMatch) {
                     const envName = beginMatch[1];
                     let contentStartIndex = beginMatch.index + beginMatch[0].length;
-                    // ... (Arg parsing logic same as before) ...
                     const requiredArgs = envName === 'tabular' ? 1 : 2;
                     let argsFound = 0;
                     while (argsFound < requiredArgs) {
@@ -779,8 +769,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                         const rows = rawContent.split(/\\\\(?:\[.*?\])?/).filter((r: string) => r.trim().length > 0).map((rowText: string) => {
                             const cells = rowText.split('&').map((c: string) => {
                                 let cellContent = c.trim();
-                                let cellAttrs = 'style="padding: 5px 10px; border: 1px solid #ddd;"';
-                                // ... (multicolumn/multirow logic) ...
+                                const cellAttrs = 'style="padding: 5px 10px; border: 1px solid #ddd;"';
                                 cellContent = resolveLatexStyles(cellContent);
                                 return `<td ${cellAttrs}>${renderer.renderInline(cellContent)}</td>`;
                             });

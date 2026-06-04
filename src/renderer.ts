@@ -8,9 +8,8 @@ import { DEFAULT_PREPROCESS_RULES, postProcessHtml } from './rules';
 import { BlockTextProvider, LatexCounterScanner } from './scanner';
 import { BibEntry } from './bib';
 import { R_CITATION, R_BIBLIOGRAPHY } from './patterns';
-import { IFileProvider } from './file-provider';
 import { normalizeUri, stableHash } from './utils';
-import { ProtectionManager } from './protection'; // [NEW]
+import { ProtectionManager } from './protection';
 
 export interface RenderOptions {
     deferFullHtml?: boolean;
@@ -54,7 +53,7 @@ export class SmartRenderer {
     public citedKeys: string[] = [];
     public currentDocument: LatexDocument | undefined;
 
-    constructor(private fileProvider: IFileProvider) {
+    constructor() {
         this.rebuildMarkdownEngine({});
         this.reloadAllRules();
     }
