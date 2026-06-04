@@ -1475,6 +1475,12 @@ suite('Webview resource loading', () => {
 
         assert.match(buildSource, /patchTikzJaxWorkerBootstrap/);
         assert.match(buildSource, /function replaceOrThrow/);
+        assert.match(buildSource, /function applyTextPatches/);
+        assert.match(buildSource, /function createTikzJaxSourcePatches/);
+        assert.match(buildSource, /function createRunTexSourcePatches/);
+        assert.match(buildSource, /function patchTextFile/);
+        assert.match(buildSource, /const tikzJaxPatched = patchTextFile\(tikzJaxFile, createTikzJaxSourcePatches\(runtimeAssetFiles\)\)/);
+        assert.match(buildSource, /const runTexPatched = patchTextFile\(runTexFile, createRunTexSourcePatches\(\)\)/);
         assert.match(buildSource, /throw new Error\(`\[build\] TikZJax/);
         assert.doesNotMatch(buildSource, /console\.warn\('\[build\] Warning: TikZJax/);
         assert.doesNotMatch(buildSource, /require\('zlib'\)/);
