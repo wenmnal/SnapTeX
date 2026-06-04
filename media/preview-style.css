@@ -101,6 +101,11 @@ h4 {
     contain: layout paint style;
 }
 
+.latex-block-shell {
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
 /* --- Body Text Typography --- */
 .latex-block p {
     text-indent: 2em; /* Standard LaTeX 2em indentation */

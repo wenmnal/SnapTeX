@@ -358,6 +358,87 @@ suite('LatexDocument source mapping', () => {
         assert.equal(result.blockTexts.length, 1);
     });
 
+    test('drops comment-only blocks without leaving preview gaps', async () => {
+        const mainUri = vscode.Uri.file('/project/main.tex');
+        const provider = new MemoryFileProvider(new Map([
+            [normalizeUri(mainUri), [
+                '\\begin{document}',
+                'Before the active derivation.',
+                '',
+                '%A direct approach is to incorporate CV within the model estimation step.',
+                '%\\begin{align}\\label{eq:commented}',
+                '%    x = y',
+                '%\\end{align}',
+                '%More commented explanation.',
+                '',
+                'Notice that this paragraph should follow without a blank preview block.',
+                '',
+                '\\begin{align}',
+                'x &= y \\label{eq:real}',
+                '\\end{align}',
+                '%\\begin{equation*}',
+                '%    z = 1',
+                '%\\end{equation*}',
+                'In Eq.~\\eqref{eq:real}, the real paragraph should remain.',
+                '\\end{document}'
+            ].join('\n')]
+        ]));
+        const doc = new LatexDocument(provider);
+
+        const result = await doc.parse(mainUri);
+        doc.applyResult(result);
+        const html = new SmartRenderer(provider).render(doc).htmls?.join('') ?? '';
+        const withoutComments = (text: string) => text
+            .split(/\r?\n/)
+            .map(line => {
+                const commentStart = line.search(/(?<!\\)%/);
+                return commentStart === -1 ? line : line.substring(0, commentStart);
+            })
+            .join('\n')
+            .trim();
+
+        assert.ok(result.blockTexts.every(block => withoutComments(block).length > 0));
+        assert.ok(result.blockTexts.some(block => block.includes('Notice that this paragraph')));
+        assert.ok(result.blockTexts.some(block => block.includes('In Eq.~\\eqref{eq:real}')));
+        assert.doesNotMatch(result.blockTexts.join('\n'), /eq:commented/);
+        assert.match(html, /Notice that this paragraph/);
+        assert.match(html, /In Eq\./);
+        assert.doesNotMatch(html, /eq:commented|%\\begin|<div class="latex-block"[^>]*>\s*<\/div>/);
+    });
+
+    test('drops standalone list boundary blocks without leaving preview gaps', async () => {
+        const mainUri = vscode.Uri.file('/project/main.tex');
+        const provider = new MemoryFileProvider(new Map([
+            [normalizeUri(mainUri), [
+                '\\begin{document}',
+                '\\begin{itemize}',
+                '    \\item First item with continuation text.',
+                '',
+                '\\item Second item after a paragraph break.',
+                '',
+                '    \\item Third item before the list closes.',
+                '',
+                '\\end{itemize}',
+                '',
+                'The next paragraph should follow the list without a blank preview block.',
+                '\\end{document}'
+            ].join('\n')]
+        ]));
+        const doc = new LatexDocument(provider);
+
+        const result = await doc.parse(mainUri);
+        doc.applyResult(result);
+        const html = new SmartRenderer(provider).render(doc).htmls?.join('') ?? '';
+
+        assert.ok(result.blockTexts.some(block => block.includes('First item')));
+        assert.ok(result.blockTexts.some(block => block.includes('Second item')));
+        assert.ok(result.blockTexts.some(block => block.includes('Third item')));
+        assert.ok(result.blockTexts.some(block => block.includes('The next paragraph')));
+        assert.ok(result.blockTexts.every(block => block.trim() !== '\\end{itemize}'));
+        assert.doesNotMatch(html, /<div class="latex-block"[^>]*>\s*<\/div>/);
+        assert.match(html, /The next paragraph should follow the list/);
+    });
+
     test('inlines standalone TikZ inputs without treating their document end as the root end', async () => {
         const mainUri = vscode.Uri.file('/project/main.tex');
         const figureUri = vscode.Uri.file('/project/figures/fold_illus_reliever.tex');
@@ -440,6 +521,21 @@ suite('SmartRenderer', () => {
         assert.doesNotMatch(html, /class="latex-block algorithm/);
     });
 
+    test('removes standalone comment lines without creating blank preview gaps', () => {
+        const html = renderBlocks([
+            [
+                'aaa.',
+                '% bbb',
+                '    % ccc',
+                '% ddd',
+                'eee.'
+            ].join('\n')
+        ]);
+
+        assert.match(html, /aaa\.\neee\./);
+        assert.doesNotMatch(html, /bbb|ccc|ddd|<div class="latex-block"[^>]*>\s*<\/div>/);
+    });
+
     test('keeps registered preprocess rules sorted by priority', () => {
         const provider = new MemoryFileProvider();
         const renderer = new SmartRenderer(provider);
@@ -488,15 +584,21 @@ suite('SmartRenderer', () => {
 
     test('can defer full HTML and render block HTML on demand', () => {
         const renderer = new SmartRenderer(new MemoryFileProvider());
-        const payload = renderer.render(createDocument(['A', 'B']), { deferFullHtml: true });
+        const payload = renderer.render(createDocument([
+            'See Figure~\\ref{fig:a} and \\cite{smith2024}.',
+            '\\begin{figure}\\caption{A}\\label{fig:a}\\end{figure}',
+            '\\bibliography{refs}'
+        ]), { deferFullHtml: true });
 
         assert.equal(payload.type, 'full');
         assert.equal(payload.htmls, undefined);
-        assert.equal(payload.blocks?.length, 2);
-        assert.deepStrictEqual(payload.blocks?.map(block => block.index), [0, 1]);
-        assert.equal(payload.blocks?.[1].hash, stableHash('B'));
+        assert.equal(payload.blocks?.length, 3);
+        assert.deepStrictEqual(payload.blocks?.map(block => block.index), [0, 1, 2]);
+        assert.equal(payload.blocks?.[1].hash, stableHash('\\begin{figure}\\caption{A}\\label{fig:a}\\end{figure}'));
+        assert.deepStrictEqual(payload.blocks?.[1].anchors, ['fig:a']);
+        assert.ok(payload.blocks?.[2].anchors.includes('ref-smith2024'));
         assert.match(renderer.renderBlockByIndex(1) ?? '', /data-index="1"/);
-        assert.match(renderer.renderBlockByIndex(1) ?? '', new RegExp(`data-block-hash="${stableHash('B')}"`));
+        assert.match(renderer.renderBlockByIndex(1) ?? '', new RegExp(`data-block-hash="${stableHash('\\begin{figure}\\caption{A}\\label{fig:a}\\end{figure}')}"`));
     });
 
     test('escapes maketitle metadata while preserving LaTeX formatting', () => {
@@ -780,6 +882,8 @@ suite('PDF request validation', () => {
         assert.match(webviewSource, /vscode\.postMessage\(\{ command: 'requestBlockHtml', id, index, hash \}\)/);
         assert.match(webviewSource, /case 'blockHtml':/);
         assert.match(webviewSource, /parseBlockHtml\(html\)/);
+        assert.match(webviewSource, /callbacks: requestOptions\.onLoaded \? \[requestOptions\.onLoaded\] : \[\]/);
+        assert.match(webviewSource, /pending\.callbacks\.push\(requestOptions\.onLoaded\)/);
         assert.match(webviewSource, /this\.smartFullUpdateFromBlocks\(payload\.htmls, payload\.preserveUnchangedBlocks !== false\)/);
     });
 
@@ -894,6 +998,7 @@ suite('Webview resource loading', () => {
         const packageSource = fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8');
         const panelSource = fs.readFileSync(path.join(repoRoot, 'src', 'panel.ts'), 'utf8');
         const webviewSource = fs.readFileSync(path.join(repoRoot, 'media', 'webview.html'), 'utf8');
+        const styleSource = fs.readFileSync(path.join(repoRoot, 'media', 'preview-style.css'), 'utf8');
 
         assert.match(packageSource, /"snaptex\.experimentalVirtualization"/);
         assert.match(packageSource, /"default": false/);
@@ -905,13 +1010,36 @@ suite('Webview resource loading', () => {
         assert.match(webviewSource, /rememberBlockHeight\(block\)/);
         assert.match(webviewSource, /createShellForBlock\(block\)/);
         assert.match(webviewSource, /createShellForMeta\(meta\)/);
+        assert.match(webviewSource, /getAnchorIdsFromBlock\(block\)/);
+        assert.match(webviewSource, /findShellByAnchorId\(anchorId\)/);
         assert.match(webviewSource, /data-html-loaded/);
         assert.match(webviewSource, /data-html-requested/);
         assert.match(webviewSource, /className = 'latex-block-shell'/);
         assert.match(webviewSource, /data-mounted/);
-        assert.match(webviewSource, /mountShell\(shell\)/);
+        assert.match(webviewSource, /BLOCK_VIRTUALIZATION_BASE_PRELOAD_MARGIN/);
+        assert.match(webviewSource, /BLOCK_VIRTUALIZATION_DIRECTIONAL_PRELOAD_MARGIN/);
+        assert.match(webviewSource, /BLOCK_VIRTUALIZATION_RETAIN_MARGIN/);
+        assert.match(webviewSource, /BLOCK_VIRTUALIZATION_CLEANUP_DELAY_MS/);
+        assert.match(webviewSource, /mountShell\(shell, onMissingHtml\)/);
         assert.match(webviewSource, /unmountShell\(shell\)/);
-        assert.match(webviewSource, /updateMountedShells\(onMount\)/);
+        assert.match(webviewSource, /lockShellHeight\(shell, height\)/);
+        assert.match(webviewSource, /unlockShellHeight\(shell\)/);
+        assert.match(webviewSource, /refreshMountedShellHeight\(shell, options = \{\}\)/);
+        assert.match(webviewSource, /isShellAboveViewport\(shell\)/);
+        assert.match(webviewSource, /if \(this\.isShellAboveViewport\(shell\)\) \{\s*this\.lockShellHeight\(shell, reservedHeight\);\s*\} else \{\s*this\.unlockShellHeight\(shell\);\s*\}/);
+        assert.match(webviewSource, /if \(this\.isShellAboveViewport\(shell\)\) \{\s*this\.lockShellHeight\(shell, height\);\s*\} else \{\s*this\.unlockShellHeight\(shell\);\s*\}/);
+        assert.match(webviewSource, /forceHeightUpdate/);
+        assert.match(webviewSource, /shell\.style\.height = ''/);
+        assert.match(webviewSource, /shell\.style\.minHeight = ''/);
+        assert.match(styleSource, /\.latex-block-shell\s*\{[\s\S]*overflow: hidden;/);
+        assert.match(webviewSource, /updateMountedShells\(onMount, onMissingHtml, options = \{\}\)/);
+        assert.match(webviewSource, /isShellInMountRange\(shell, direction = 'none'\)/);
+        assert.match(webviewSource, /isShellInRetainRange\(shell\)/);
+        assert.doesNotMatch(webviewSource, /window\.scrollBy\(0, delta\)/);
+        assert.doesNotMatch(webviewSource, /withScrollCompensation\(shell, action\)/);
+        assert.match(webviewSource, /this\.resizeObserver = typeof ResizeObserver !== 'undefined'/);
+        assert.match(webviewSource, /onShellResize\(entries\)/);
+        assert.match(webviewSource, /this\.virtualization\.unobserveShell\(shell\)/);
         assert.match(webviewSource, /replaceContentWithShells\(blocks, onMount\)/);
         assert.match(webviewSource, /replaceContentWithBlockMetadata\(blocks, onMount, onMissingHtml\)/);
         assert.match(webviewSource, /storeBlockHtml\(index, hash, html\)/);
@@ -919,8 +1047,51 @@ suite('Webview resource loading', () => {
         assert.match(webviewSource, /this\.virtualization\.replaceContentWithShells\(newElements/);
         assert.match(webviewSource, /applyVirtualPatch\(payload\)/);
         assert.match(webviewSource, /getBlockOrShellByIndex\(index\)/);
-        assert.match(webviewSource, /window\.addEventListener\('resize', \(\) => this\.updateVirtualizedBlocks\(\)\)/);
+        assert.match(webviewSource, /window\.addEventListener\('resize', \(\) => this\.updateVirtualizedBlocks\(\{ allowUnmount: true \}\)\)/);
         assert.match(webviewSource, /this\.virtualization\.rememberBlockHeight\(oldBlock\)/);
+    });
+
+    test('routes virtualized refs and tooltips through anchor-aware shell mounting', () => {
+        const repoRoot = path.resolve(__dirname, '..', '..');
+        const webviewSource = fs.readFileSync(path.join(repoRoot, 'media', 'webview.html'), 'utf8');
+
+        assert.match(webviewSource, /window\.snaptexPreviewController = this/);
+        assert.match(webviewSource, /document\.addEventListener\('click', event => this\.onInternalLinkClick\(event\)\)/);
+        assert.match(webviewSource, /async ensureAnchorMounted\(anchorId\)/);
+        assert.match(webviewSource, /this\.virtualization\.findShellByAnchorId\(anchorId\)/);
+        assert.match(webviewSource, /await this\.ensureShellMounted\(shell, \{ forceHeightUpdate: true \}\)/);
+        assert.match(webviewSource, /async onInternalLinkClick\(event\)/);
+        assert.match(webviewSource, /event\.preventDefault\(\)/);
+        assert.match(webviewSource, /await this\.ensureAnchorMounted\(anchorId\)/);
+        assert.match(webviewSource, /async resolveTargetElement\(targetId\)/);
+        assert.match(webviewSource, /controller\.ensureAnchorMounted\(targetId\)/);
+    });
+
+    test('stabilizes virtualized forward sync before scrolling', () => {
+        const repoRoot = path.resolve(__dirname, '..', '..');
+        const extensionSource = fs.readFileSync(path.join(repoRoot, 'src', 'extension.ts'), 'utf8');
+        const webviewSource = fs.readFileSync(path.join(repoRoot, 'media', 'webview.html'), 'utf8');
+
+        assert.match(extensionSource, /let autoSyncTimer: NodeJS\.Timeout \| undefined/);
+        assert.match(extensionSource, /const clearPendingAutoSync = \(\) =>/);
+        assert.match(extensionSource, /const scheduleAutoSyncToPreview = \(/);
+        assert.match(extensionSource, /clearPendingAutoSync\(\);\s*if \(editor\) \{ triggerSyncToPreview/);
+        assert.match(webviewSource, /this\.scrollCommandSeq = 0/);
+        assert.match(webviewSource, /async ensureBlockMountedByIndex\(index\)/);
+        assert.match(webviewSource, /if \(target\) return \{ target, mounted: false \}/);
+        assert.match(webviewSource, /const block = await this\.ensureShellMounted\(shell, \{ forceHeightUpdate: true \}\)/);
+        assert.match(webviewSource, /return \{ target: block \|\| shell, mounted: Boolean\(block\) \}/);
+        assert.match(webviewSource, /async executeScroll\(data\)/);
+        assert.match(webviewSource, /const scrollSeq = \+\+this\.scrollCommandSeq/);
+        assert.match(webviewSource, /const mountResult = await this\.ensureBlockMountedByIndex\(index\)/);
+        assert.match(webviewSource, /if \(!auto \|\| mountResult\.mounted\) \{\s*await this\.waitForLayout\(\)/);
+        assert.match(webviewSource, /const autoSkipThreshold = 12/);
+        assert.match(webviewSource, /this\.requestVirtualizedUpdate\(\{ allowUnmount: false \}\)/);
+        assert.match(webviewSource, /this\.scheduleVirtualizedCleanup\(\)/);
+        assert.match(webviewSource, /this\.scrollDirection = delta < 0 \? 'up' : 'down'/);
+        assert.match(webviewSource, /direction: this\.scrollDirection/);
+        assert.match(webviewSource, /allowUnmount: options\.allowUnmount !== false/);
+        assert.doesNotMatch(webviewSource, /setTimeout\(\(\) => \{[\s\S]*const newTargetY = calcY\(\)/);
     });
 
     test('routes TikZ compile failures through the webview error state', () => {

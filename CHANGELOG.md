@@ -6,13 +6,21 @@ All notable changes to the "SnapTeX" extension will be documented in this file.
 - **Fixed**: Corrected renderer block structure issues, including nested `.latex-block` output in floats, TikZ block splitting at blank lines, protected final environment flushing, starred float numbering, preprocess rule priority ordering, spaced `\label {key}` parsing, and URI normalization for remote paths.
 - **Fixed**: Prevented standalone TikZ files included via `\input` inside figures from leaking their wrapper preamble/body delimiters, truncating the root document at the included `\end{document}`, or rendering macro definitions as source.
 - **Fixed**: Kept long `tikzpicture` blocks and their surrounding figure/resizebox wrapper from triggering the splitter emergency line-limit recovery, preventing large TikZ figures from being split and shown as raw source.
+- **Fixed**: Dropped comment-only blocks and standalone comment lines from preview rendering so long commented-out LaTeX sections no longer create large blank gaps.
+- **Fixed**: Dropped standalone list boundary blocks, such as an isolated `\end{itemize}`, so blank lines around list endings no longer create empty preview blocks.
 - **Security**: Hardened preview sync/PDF request handling and escaped `\maketitle` title, author, and date metadata before inserting it into webview HTML.
 - **Added**: Expanded the core test suite for diffing, splitting, counters, BibTeX parsing, metadata extraction, protection tokens, URI normalization, renderer behavior, PDF request validation, TikZ loading, and long-document smoke coverage.
 - **Added**: Memory instrumentation and update coalescing for extension-host rendering and webview DOM/PDF/TikZ stats.
 - **Changed**: Switched PDF rendering to a URI-only pipeline with PDF.js URL loading, non-streaming webview resource requests, a real blob module worker, viewport-near lazy rendering, and far-offscreen canvas bitmap release.
 - **Changed**: Reworked TikZ rendering to lazy-load TikZJax, bootstrap worker assets through blob URLs, cache runtime resources for the webview session, prune unused TikZ libraries per picture, preserve stale SVGs while rerendering, surface compile failures cleanly, add watchdogs, and coalesce edit-triggered render batches.
 - **Changed**: Improved full-update behavior with block text hashes, block-list full payloads, per-block path fixing, and DOM preservation for unchanged blocks while keeping the existing fixed full-update threshold.
-- **Added**: Prepared disabled block virtualization plumbing behind `snaptex.experimentalVirtualization`, including a webview controller and block height cache for future shell-based mounting.
+- **Added**: Implemented experimental shell-based block virtualization behind `snaptex.experimentalVirtualization`, including shell placeholders, measured/estimated block heights, viewport-near mounting, far-offscreen unmounting, and editor-to-preview sync through shells.
+- **Fixed**: Restored `\ref`/citation anchor jumps and hover tooltips under experimental block virtualization by indexing anchors on block shells and mounting the target block on demand.
+- **Fixed**: Stabilized forward sync under experimental block virtualization by mounting the target block before scrolling and cancelling stale auto-sync timers.
+- **Changed**: Replaced fragile manual `scrollY` compensation in experimental block virtualization with a larger directional preload window and delayed cleanup of far-offscreen mounted blocks, making upward scrolling smoother while preserving most memory savings.
+- **Changed**: Kept only above-viewport virtualized shells height-locked during hydration, while visible mounted shells release estimated heights so real DOM controls spacing between visible blocks.
+- **Changed**: Smoothed editor-to-preview auto-scroll by skipping layout waits for already mounted targets and reducing the small-distance skip threshold.
+- **Changed**: Virtualized full updates can now send block metadata first and request block HTML on demand only when a shell needs to mount, reducing initial DOM/HTML/PDF/TikZ memory for long previews while keeping the existing non-virtualized payload paths as fallbacks.
 
 ## [0.5.13] - 2026-05-14
 - **Added**: clean_layout_cmds rule to preprocess layout commands and no-indent markers

@@ -130,7 +130,7 @@ export class LatexDocument {
         };
 
         for (const b of rawBlockObjects) {
-            if (b.text.trim().length > 0) {
+            if (this.hasRenderableContent(b.text)) {
                 const flattenedText = (' ' + b.text).slice(1);
                 res.blockTexts.push(flattenedText);
                 res.blockLines.push(b.line);
@@ -139,6 +139,22 @@ export class LatexDocument {
         }
 
         return res;
+    }
+
+    private hasRenderableContent(text: string): boolean {
+        const withoutComments = text
+            .split(/\r?\n/)
+            .map(line => {
+                const commentStart = line.search(/(?<!\\)%/);
+                return commentStart === -1 ? line : line.substring(0, commentStart);
+            })
+            .join('\n');
+
+        const withoutListStructure = withoutComments
+            .replace(/\\(?:begin|end)\{(?:itemize|enumerate)\}/g, '')
+            .replace(/\\item(?:\[[^\]]*\])?/g, '');
+
+        return withoutListStructure.trim().length > 0;
     }
 
     private async loadAndFlatten(

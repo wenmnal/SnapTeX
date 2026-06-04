@@ -218,14 +218,15 @@ function filterTikzGlobalForPicture(globalPreamble: string, pictureSource: strin
 }
 
 export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
-    // Removes the % marker left by metadata.ts and consumes the following newline.
-    // This mimics LaTeX behavior: "Word%\nNext" -> "WordNext" (joined).
-    // "Line\n%\nLine" -> "Line\nLine" -> Rendered as "Line Line" (space).
+    // Removes the % marker left by metadata.ts without turning long comment blocks into giant blank gaps.
+    // This mimics LaTeX behavior for inline comments while collapsing standalone comment-only lines.
     {
         name: 'clean_comments',
         priority: 5,
         apply: (text, renderer: SmartRenderer) => {
-            return text.replace(/(?<!\\)%.*(\r?\n)?/g, '');
+            return text
+                .replace(/^[ \t]*%.*(?:\r?\n|$)/gm, '')
+                .replace(/(?<!\\)%.*(\r?\n)?/g, '');
         }
     },
 
