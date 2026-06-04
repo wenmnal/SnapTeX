@@ -3,6 +3,7 @@
  */
 
 import * as vscode from 'vscode';
+import type { RenderContext } from './types';
 
 /**
  * Capitalizes the first letter of a string.
@@ -66,6 +67,25 @@ export function escapeHtml(text: string): string {
 
 export function escapeHtmlAttribute(text: string): string {
     return escapeHtml(text);
+}
+
+export function escapeScriptRawText(text: string): string {
+    return text.replace(/<\/script/gi, '<\\/script');
+}
+
+export function sanitizeHttpUrlForAttribute(rawUrl: string): string | undefined {
+    const trimmed = rawUrl.trim();
+    if (!trimmed) { return undefined; }
+
+    try {
+        const url = new URL(trimmed);
+        if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+            return undefined;
+        }
+        return escapeHtmlAttribute(url.href);
+    } catch {
+        return undefined;
+    }
 }
 
 export function createHiddenLabelAnchor(labelName: string): string {
@@ -237,7 +257,7 @@ function applyStyleToTexList(startTag: string, endTag: string, content: string):
  * Keeps text content but removes common formatting commands.
  * This is essential for rendering clean text inside Algorithms, Figures, and Tables.
  */
-export function cleanLatexCommands(text: string, renderer: any): string {
+export function cleanLatexCommands(text: string, renderer: Pick<RenderContext, 'protect'>): string {
     if (!text) {return '';}
 
     // 0. Decode Accents First (Fixes European names)
@@ -251,10 +271,10 @@ export function cleanLatexCommands(text: string, renderer: any): string {
 
     // 2. Clean common formatting but keep content
     processed = processed
-        .replace(/\\textbf\{([^}]+)\}/g, '<b>$1</b>')
-        .replace(/\\textit\{([^}]+)\}/g, '<i>$1</i>')
-        .replace(/\\texttt\{([^}]+)\}/g, '<code>$1</code>')
-        .replace(/\\emph\{([^}]+)\}/g, '<em>$1</em>')
+        .replace(/\\textbf\{([^}]+)\}/g, (_match, content) => renderer.protect('bib-style', `<b>${escapeHtml(content)}</b>`))
+        .replace(/\\textit\{([^}]+)\}/g, (_match, content) => renderer.protect('bib-style', `<i>${escapeHtml(content)}</i>`))
+        .replace(/\\texttt\{([^}]+)\}/g, (_match, content) => renderer.protect('bib-style', `<code>${escapeHtml(content)}</code>`))
+        .replace(/\\emph\{([^}]+)\}/g, (_match, content) => renderer.protect('bib-style', `<em>${escapeHtml(content)}</em>`))
         .replace(/\\cite\{[^}]+\}/g, '[cite]')
         .replace(/\\ref\{[^}]+\}/g, '[ref]')
         .replace(/\\small\s*/g, '')
@@ -274,7 +294,7 @@ export function cleanLatexCommands(text: string, renderer: any): string {
     // We only remove braces that are NOT part of our protection tokens (tokens don't have braces anyway)
     processed = processed.replace(/([{}])/g, () => '');
 
-    return processed;
+    return escapeHtml(processed);
 }
 
 

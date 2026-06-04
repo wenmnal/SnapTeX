@@ -267,6 +267,39 @@ suite('BibTexParser', () => {
         assert.ok(entry);
         assert.equal(BibTexParser.getShortAuthor(entry), 'Muller <em>et al.</em>');
     });
+
+    test('escapes formatted bibliography fields and rejects unsafe URLs', () => {
+        const renderer = new SmartRenderer();
+        const entry = {
+            key: 'unsafe',
+            type: 'article',
+            fields: {
+                author: 'Eve <img src=x onerror=alert(1)>',
+                title: '\\textbf{Bold <script>alert(1)</script>}',
+                journal: 'Journal & Review',
+                year: '2026"><script>',
+                doi: '10.1/example" onclick="alert(1)<x>'
+            }
+        };
+
+        const html = renderer.protector.resolve(BibTexParser.formatEntry(entry, renderer));
+
+        assert.doesNotMatch(html, /<script|<img|onclick="/i);
+        assert.match(html, /Eve &lt;img src=x onerror=alert\(1\)&gt;/);
+        assert.match(html, /<b>Bold &lt;script&gt;alert\(1\)&lt;\/script&gt;<\/b>/);
+        assert.match(html, /2026&quot;&gt;&lt;script&gt;/);
+        assert.match(html, /href="https:\/\/doi\.org\/10\.1\/example%22%20onclick=%22alert\(1\)%3Cx%3E"/);
+
+        const unsafeUrlEntry = {
+            key: 'bad-url',
+            type: 'misc',
+            fields: {
+                title: 'Unsafe URL',
+                url: 'javascript:alert(1)'
+            }
+        };
+        assert.doesNotMatch(BibTexParser.formatEntry(unsafeUrlEntry, renderer), /href=/i);
+    });
 });
 
 suite('LaTeX style utilities', () => {
@@ -302,8 +335,15 @@ suite('LaTeX style utilities', () => {
         });
 
         assert.match(cleaned, /M.ller/);
-        assert.match(cleaned, /<b>Bold<\/b>/);
+        assert.doesNotMatch(cleaned, /<b>Bold<\/b>/);
+        assert.match(protector.resolve(cleaned), /<b>Bold<\/b>/);
         assert.match(protector.resolve(cleaned), /<span>math<\/span>/);
+
+        const unsafe = cleanLatexCommands('\\textbf{<script>alert(1)</script>} <img src=x>', {
+            protect: (namespace: string, content: string) => protector.protect(namespace, content)
+        });
+        assert.doesNotMatch(protector.resolve(unsafe), /<script|<img/i);
+        assert.match(protector.resolve(unsafe), /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
     });
 
     test('post-processes abstract and keyword sentinel blocks', () => {
@@ -828,6 +868,21 @@ suite('SmartRenderer', () => {
         assert.equal(html.match(/class="latex-block/g)?.length ?? 0, 2);
     });
 
+    test('escapes includegraphics paths before inserting them into attributes', () => {
+        const html = renderBlocks([
+            [
+                '\\begin{figure}',
+                '\\includegraphics{figures/a" onerror="alert(1).pdf}',
+                '\\includegraphics{figures/b" onload="alert(1).png}',
+                '\\end{figure}'
+            ].join('\n')
+        ]);
+
+        assert.match(html, /data-req-path="figures\/a&quot; onerror=&quot;alert\(1\)\.pdf"/);
+        assert.match(html, /src="LOCAL_IMG:figures\/b&quot; onload=&quot;alert\(1\)\.png"/);
+        assert.doesNotMatch(html, /\s(?:onerror|onload)="/i);
+    });
+
     test('renders reference and citation edge cases', () => {
         const doc = createDocument([
             [
@@ -874,6 +929,19 @@ suite('SmartRenderer', () => {
         assert.match(html, /class="tikz-container"/);
         assert.match(html, /<script type="text\/snaptex-tikz"/);
         assert.doesNotMatch(html, /\\resizebox/);
+    });
+
+    test('escapes TikZ script terminators without dropping the original code', () => {
+        const html = renderBlocks([
+            [
+                '\\begin{tikzpicture}',
+                '\\node {</script><img src=x onerror=alert(1)>};',
+                '\\end{tikzpicture}'
+            ].join('\n')
+        ]);
+
+        assert.equal(html.match(/<\/script>/gi)?.length ?? 0, 1);
+        assert.match(html, /<\\\/script><img src=x onerror=alert\(1\)>/);
     });
 
     test('injects only TikZ libraries used by each picture', () => {

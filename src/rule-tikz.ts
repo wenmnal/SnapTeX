@@ -1,5 +1,5 @@
 import { PreprocessRule, RenderContext } from './types';
-import { extractAndHideLabels } from './utils';
+import { escapeScriptRawText, extractAndHideLabels } from './utils';
 
 function resolveDependencies(content: string, macroMap: Map<string, string>): string {
     const usedMacros = new Set<string>();
@@ -178,7 +178,7 @@ export function createTikzPictureRule(): PreprocessRule {
 
                 const html = `<div class="tikz-container">
                     <script type="text/snaptex-tikz" data-show-console="false">
-                        ${fullCode}
+                        ${escapeScriptRawText(fullCode)}
                     </script>
                 </div>`;
 

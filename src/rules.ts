@@ -183,13 +183,15 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 let post = '';
                 if (opt2 !== undefined) { pre = opt1 ? opt1 + ' ' : ''; post = opt2; }
                 else if (opt1 !== undefined) { post = opt1; }
+                const safePre = escapeHtml(pre);
+                const safePost = escapeHtml(post);
 
                 const parts = keyArray.map((key: string) => {
                     renderer.resolveCitation(key);
                     const entry = renderer.bibEntries.get(key);
                     if (!entry) { return { error: true, key, author: "unknown", year: "unknown" }; }
                     const author = BibTexParser.getShortAuthor(entry);
-                    const year = entry.fields.year || "unknown";
+                    const year = escapeHtml(entry.fields.year || "unknown");
                     return { error: false, key, author, year };
                 });
 
@@ -202,29 +204,29 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 if (cmd === 'citet') {
                     const formatted = parts.map((p: any, i: number) => {
                         const isLast = i === parts.length - 1;
-                        if (p.error) { return `[${p.key}?]`; }
+                        if (p.error) { return `[${escapeHtml(p.key)}?]`; }
                         let yearText = p.year;
-                        if (isLast && post) { yearText += `, ${post}`; }
+                        if (isLast && safePost) { yearText += `, ${safePost}`; }
                         return `${p.author} (${mkLink(yearText, p.key)})`;
                     }).join(', ');
-                    finalHtml = pre + formatted;
+                    finalHtml = safePre + formatted;
                 } else if (cmd === 'citeyear') {
                     const formatted = parts.map((p: any, i: number) => {
                         const isLast = i === parts.length - 1;
-                        if (p.error) { return `[${p.key}?]`; }
+                        if (p.error) { return `[${escapeHtml(p.key)}?]`; }
                         let yearText = p.year;
-                        if (isLast && post) { yearText += `, ${post}`; }
+                        if (isLast && safePost) { yearText += `, ${safePost}`; }
                         return mkLink(yearText, p.key);
                     }).join(', ');
-                    finalHtml = pre + formatted;
+                    finalHtml = safePre + formatted;
                 } else {
                     const inner = parts.map((p: any) => {
-                        if (p.error) { return `[${p.key}?]`; }
+                        if (p.error) { return `[${escapeHtml(p.key)}?]`; }
                         return mkLink(`${p.author}, ${p.year}`, p.key);
                     }).join('; ');
                     let content = inner;
-                    if (pre) { content = pre + content; }
-                    if (post) { content = content + ', ' + post; }
+                    if (safePre) { content = safePre + content; }
+                    if (safePost) { content = content + ', ' + safePost; }
                     finalHtml = `(${content})`;
                 }
 

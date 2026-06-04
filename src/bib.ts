@@ -1,4 +1,5 @@
-import { cleanLatexCommands } from './utils';
+import { cleanLatexCommands, escapeHtml, escapeHtmlAttribute, sanitizeHttpUrlForAttribute } from './utils';
+import type { RenderContext } from './types';
 
 export interface BibEntry {
     key: string;
@@ -164,14 +165,14 @@ export class BibTexParser {
         return fields;
     }
 
-    public static formatEntry(entry: BibEntry, renderer: any): string {
+    public static formatEntry(entry: BibEntry, renderer: Pick<RenderContext, 'protect'>): string {
         const f = entry.fields;
 
         let author = f.author ? cleanLatexCommands(f.author, renderer) : 'Unknown';
         author = author.replace(/\s+and\s+/g, ', ');
 
         const title = f.title ? cleanLatexCommands(f.title, renderer) : 'No Title';
-        const year = f.year || f.date || 'n.d.';
+        const year = escapeHtml(f.year || f.date || 'n.d.');
 
         const journal = f.journal || f.fjournal || f.booktitle || f.publisher || '';
 
@@ -179,19 +180,24 @@ export class BibTexParser {
 
         if (journal) {
             html += ` ${cleanLatexCommands(journal, renderer)}`;
-            if (f.volume) {html += `, <strong>${f.volume}</strong>`;}
-            if (f.number) {html += `(${f.number})`;}
+            if (f.volume) {html += `, <strong>${escapeHtml(f.volume)}</strong>`;}
+            if (f.number) {html += `(${escapeHtml(f.number)})`;}
             html += `.`;
         }
 
         if (f.pages) {
-            html += ` pp. ${f.pages.replace('--', '-')}.`;
+            html += ` pp. ${escapeHtml(f.pages.replace('--', '-'))}.`;
         }
 
         if (f.doi) {
-            html += ` <a href="https://doi.org/${f.doi}" style="color:#007acc;">doi:${f.doi}</a>`;
+            const doi = f.doi.trim();
+            const href = escapeHtmlAttribute(`https://doi.org/${encodeURI(doi)}`);
+            html += ` <a href="${href}" style="color:#007acc;">doi:${escapeHtml(doi)}</a>`;
         } else if (f.url) {
-            html += ` <a href="${f.url}" style="color:#007acc;">[Link]</a>`;
+            const href = sanitizeHttpUrlForAttribute(f.url);
+            if (href) {
+                html += ` <a href="${href}" style="color:#007acc;">[Link]</a>`;
+            }
         }
 
         return html;
@@ -224,11 +230,11 @@ public static getShortAuthor(entry: BibEntry): string {
         };
 
         if (authors.length > 2) {
-            return `${getSurname(authors[0])} <em>et al.</em>`;
+            return `${escapeHtml(getSurname(authors[0]))} <em>et al.</em>`;
         }
         if (authors.length === 2) {
-            return `${getSurname(authors[0])} & ${getSurname(authors[1])}`;
+            return `${escapeHtml(getSurname(authors[0]))} &amp; ${escapeHtml(getSurname(authors[1]))}`;
         }
-        return getSurname(authors[0]);
+        return escapeHtml(getSurname(authors[0]));
     }
 }

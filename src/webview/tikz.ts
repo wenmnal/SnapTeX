@@ -11,6 +11,9 @@ export const TIKZ_PENDING_SCRIPT_TYPE = 'text/snaptex-tikz';
 export const TIKZ_ACTIVE_SCRIPT_TYPE = 'text/tikz';
 export const TIKZ_PENDING_SCRIPT_SELECTOR = `script[type="${TIKZ_PENDING_SCRIPT_TYPE}"]`;
 export const TIKZ_SCRIPT_SELECTOR = `${TIKZ_PENDING_SCRIPT_SELECTOR}, script[type="${TIKZ_ACTIVE_SCRIPT_TYPE}"]`;
+function restoreTikzScriptText(text) {
+        return String(text || '').replace(/<\\\/script/gi, '</script');
+    }
 export function hasRenderedTikz(container) {
         return !!container.querySelector('svg[role="img"]:not(.tikz-stale-preview)');
     }
@@ -123,7 +126,7 @@ export function setTikzContainerState(container, state) {
                 }
             }
             activeScript.type = TIKZ_ACTIVE_SCRIPT_TYPE;
-            activeScript.textContent = script.textContent;
+            activeScript.textContent = restoreTikzScriptText(script.textContent);
             script.replaceWith(activeScript);
         });
         return pendingScripts.length;

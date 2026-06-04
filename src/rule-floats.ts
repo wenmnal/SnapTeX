@@ -1,5 +1,5 @@
 import { PreprocessRule, RenderContext } from './types';
-import { extractAndHideLabels, findBalancedClosingBrace, findCommand, resolveLatexStyles } from './utils';
+import { escapeHtmlAttribute, extractAndHideLabels, findBalancedClosingBrace, findCommand, resolveLatexStyles } from './utils';
 import { recoverPreservedTokens, renderCaptionContent, renderMath, unwrapResizeboxAroundProtectedContent } from './rule-helpers';
 
 export function createFigureRule(): PreprocessRule {
@@ -25,12 +25,13 @@ export function createFigureRule(): PreprocessRule {
 
                 body = body.replace(/\\includegraphics(?:\[.*?\])?\s*\{([^}]+)\}/g, (_imgMatch: string, imgPath: string) => {
                     const cleanPath = imgPath.trim();
+                    const safePath = escapeHtmlAttribute(cleanPath);
                     const canvasId = `pdf-${Math.random().toString(36).substr(2, 9)}`;
 
                     if (cleanPath.toLowerCase().endsWith('.pdf')) {
-                        return `<canvas id="${canvasId}" data-req-path="${cleanPath}" style="width:100%; max-width:100%; display:block; margin:0 auto;"></canvas>`;
+                        return `<canvas id="${canvasId}" data-req-path="${safePath}" style="width:100%; max-width:100%; display:block; margin:0 auto;"></canvas>`;
                     }
-                    return `<img src="LOCAL_IMG:${cleanPath}" style="max-width:100%; display:block; margin:0 auto;">`;
+                    return `<img src="LOCAL_IMG:${safePath}" style="max-width:100%; display:block; margin:0 auto;">`;
                 });
 
                 const finalHtml = `<div class="latex-figure" style="text-align: center; margin: 1em 0;">${body}${captionHtml}${hiddenHtml}</div>`;
