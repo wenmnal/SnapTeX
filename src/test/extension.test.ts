@@ -11,6 +11,7 @@ import { IFileProvider } from '../file-provider';
 import { extractMetadata } from '../metadata';
 import { isUriWithinAllowedRoots, normalizePdfRequestPath } from '../panel';
 import { ProtectionManager } from '../protection';
+import { postProcessHtml } from '../rules';
 import { LatexCounterScanner } from '../scanner';
 import { LatexBlockSplitter } from '../splitter';
 import { SmartRenderer } from '../renderer';
@@ -302,6 +303,20 @@ suite('LaTeX style utilities', () => {
         assert.match(cleaned, /M.ller/);
         assert.match(cleaned, /<b>Bold<\/b>/);
         assert.match(protector.resolve(cleaned), /<span>math<\/span>/);
+    });
+
+    test('post-processes abstract and keyword sentinel blocks', () => {
+        const html = postProcessHtml([
+            '<p>OOABSTRACT_STARTOO</p>',
+            '<p>This is the abstract.</p>',
+            '<p>OOABSTRACT_ENDOO</p>',
+            '<p>OOKEYWORDS_STARTOOalpha; betaOOKEYWORDS_ENDOO</p>'
+        ].join(''));
+
+        assert.match(html, /<div class="latex-abstract"><span class="latex-abstract-title">Abstract<\/span>/);
+        assert.match(html, /<p>This is the abstract\.<\/p><\/div>/);
+        assert.match(html, /<div class="latex-keywords"><strong>Keywords:<\/strong> alpha; beta<\/div>/);
+        assert.doesNotMatch(html, /OOABSTRACT|OOKEYWORDS/);
     });
 });
 
