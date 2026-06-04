@@ -1,0 +1,49 @@
+\documentclass{article}
+\usepackage{tikz}
+\usetikzlibrary{calc, positioning, arrows.meta}
+\newcommand{\vect}[1]{\mathbf{#1}}
+
+\begin{document}
+\title{Long Fixture}
+\author{SnapTeX}
+\maketitle
+
+\section{Intro}\label{sec:intro}
+This is the first paragraph with inline math $\vect{x}$ and a reference to Section~\ref{sec:intro}.
+
+\subsection{Setup}
+The second paragraph contains a citation \cite{smith2024} and more text for block splitting.
+
+\begin{figure}
+\centering
+\includegraphics{figures/result.pdf}
+\caption{A PDF figure}
+\label{fig:pdf}
+\end{figure}
+
+\begin{figure}
+\centering
+\begin{tikzpicture}
+\path coordinate (A) at (0,0) coordinate (B) at (2,0);
+\path coordinate (C) at ($ (A)!.5!(B) $);
+\draw[-{Stealth}] (A) -- (B);
+\node[above=of C] {Center};
+\end{tikzpicture}
+\caption{A TikZ figure}
+\label{fig:tikz}
+\end{figure}
+
+\begin{table}
+\caption{A small table}
+\begin{tabular}{cc}
+A & B \\
+1 & 2
+\end{tabular}
+\label{tbl:small}
+\end{table}
+
+\section{More}
+Another paragraph that should stay unchanged when only the setup paragraph changes.
+
+\bibliography{refs}
+\end{document}

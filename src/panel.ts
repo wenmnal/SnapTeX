@@ -249,7 +249,8 @@ export class TexPreviewPanel {
             command: 'config',
             config: {
                 autoScrollDelay: Math.max(0, config.get<number>('autoScrollDelay', 100)),
-                debugMemory: config.get<boolean>('debugMemory', false)
+                debugMemory: config.get<boolean>('debugMemory', false),
+                experimentalVirtualization: config.get<boolean>('experimentalVirtualization', false)
             }
         });
     }

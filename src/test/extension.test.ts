@@ -84,6 +84,10 @@ function renderBlocks(blockTexts: string[]): string {
     return payload.htmls.join('');
 }
 
+function readFixture(name: string): string {
+    return fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'test', 'fixtures', name), 'utf8');
+}
+
 suite('DiffEngine', () => {
     test('computes unchanged, insert, delete, and replace spans', () => {
         assert.deepStrictEqual(DiffEngine.compute(['a', 'b'], ['a', 'b']), {
@@ -405,6 +409,38 @@ suite('SmartRenderer', () => {
         assert.equal(next.preserveUnchangedBlocks, false);
     });
 
+    test('escapes maketitle metadata while preserving LaTeX formatting', () => {
+        const renderer = new SmartRenderer(new MemoryFileProvider());
+        const payload = renderer.render(createDocument(['\\maketitle'], {
+            title: '<img src=x onerror=alert(1)> \\textbf{Safe} $x<y$',
+            author: 'Ada & Bob',
+            date: '2026 <script>alert(1)</script>'
+        }));
+        const html = payload.htmls?.join('') ?? '';
+
+        assert.doesNotMatch(html, /<img/i);
+        assert.doesNotMatch(html, /<script/i);
+        assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
+        assert.match(html, /Ada &amp; Bob/);
+        assert.match(html, /2026 &lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+        assert.match(html, /<strong>Safe<\/strong>/);
+        assert.match(html, /class="katex"/);
+    });
+
+    test('updates maketitle metadata without exposing raw metadata in block hashes', () => {
+        const renderer = new SmartRenderer(new MemoryFileProvider());
+        renderer.render(createDocument(['\\maketitle'], { title: 'First' }));
+
+        const payload = renderer.render(createDocument(['\\maketitle'], { title: 'Second <tag>' }));
+        const html = payload.htmls?.join('') ?? '';
+
+        assert.equal(payload.type, 'patch');
+        assert.equal(payload.start, 0);
+        assert.match(html, /Second &lt;tag&gt;/);
+        assert.doesNotMatch(html, /Second <tag>/);
+        assert.doesNotMatch(html, /data-block-hash="[^"]*Second/);
+    });
+
     test('uses full render when a replacement edit exceeds the fixed threshold', () => {
         const renderer = new SmartRenderer(new MemoryFileProvider());
         const oldBlocks = Array.from({ length: 300 }, (_, index) => `Block ${index}`);
@@ -532,6 +568,39 @@ suite('SmartRenderer', () => {
         assert.match(html, /\\usetikzlibrary\{decorations\.pathreplacing\}/);
         assert.doesNotMatch(html, /positioning/);
         assert.doesNotMatch(html, /calc/);
+    });
+
+    test('renders a fixture-backed long document and keeps localized edits as patches', async () => {
+        const mainUri = vscode.Uri.file('/project/long-doc.tex');
+        const bibUri = vscode.Uri.file('/project/refs.bib');
+        const fixtureText = readFixture('long-doc.tex');
+        const files = new Map([
+            [normalizeUri(mainUri), fixtureText],
+            [normalizeUri(bibUri), '@article{smith2024, title={Fixture Paper}, author={Smith, Jane}, year={2024}}']
+        ]);
+        const provider = new MemoryFileProvider(files);
+        const renderer = new SmartRenderer(provider);
+        const firstDoc = new LatexDocument(provider);
+        firstDoc.applyResult(await firstDoc.parse(mainUri));
+
+        const fullPayload = renderer.render(firstDoc);
+
+        assert.equal(fullPayload.type, 'full');
+        assert.ok((fullPayload.htmls?.length ?? 0) >= 8);
+        assert.ok(fullPayload.htmls?.every(html => /data-block-hash="/.test(html)));
+
+        files.set(
+            normalizeUri(mainUri),
+            fixtureText.replace('The second paragraph contains', 'The revised second paragraph contains')
+        );
+        const secondDoc = new LatexDocument(provider);
+        secondDoc.applyResult(await secondDoc.parse(mainUri));
+
+        const patchPayload = renderer.render(secondDoc);
+
+        assert.equal(patchPayload.type, 'patch');
+        assert.equal(patchPayload.htmls?.length, 1);
+        assert.match(patchPayload.htmls?.[0] ?? '', /revised second paragraph/);
     });
 });
 
@@ -720,6 +789,23 @@ suite('Webview resource loading', () => {
         assert.match(webviewSource, /newBlock\.getAttribute\('data-block-hash'\)/);
         assert.match(webviewSource, /this\.smartFullUpdate\(payload\.html, payload\.preserveUnchangedBlocks !== false\)/);
         assert.doesNotMatch(webviewSource, /outerHTML !==/);
+    });
+
+    test('keeps shell virtualization prepared behind a disabled experimental setting', () => {
+        const repoRoot = path.resolve(__dirname, '..', '..');
+        const packageSource = fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8');
+        const panelSource = fs.readFileSync(path.join(repoRoot, 'src', 'panel.ts'), 'utf8');
+        const webviewSource = fs.readFileSync(path.join(repoRoot, 'media', 'webview.html'), 'utf8');
+
+        assert.match(packageSource, /"snaptex\.experimentalVirtualization"/);
+        assert.match(packageSource, /"default": false/);
+        assert.match(panelSource, /experimentalVirtualization: config\.get<boolean>\('experimentalVirtualization', false\)/);
+        assert.match(webviewSource, /class BlockVirtualizationController/);
+        assert.match(webviewSource, /this\.enabled = false/);
+        assert.match(webviewSource, /this\.heightCache = new Map\(\)/);
+        assert.match(webviewSource, /rememberBlockHeight\(block\)/);
+        assert.match(webviewSource, /this\.virtualization\.setEnabled\(event\.data\.config\.experimentalVirtualization === true\)/);
+        assert.match(webviewSource, /this\.virtualization\.rememberBlockHeight\(oldBlock\)/);
     });
 
     test('routes TikZ compile failures through the webview error state', () => {

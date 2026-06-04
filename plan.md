@@ -1,7 +1,7 @@
 # SnapTeX Optimization TODO
 
 > Current branch: `dev`  
-> Last verified: `npm test` passed with 45 tests after switching default full updates to block payloads.
+> Last verified: `npm test` passed with 49 tests after escaping `\maketitle` metadata and hashing the metadata rerender fingerprint.
 > Rule for future work: keep each change block small, add or update tests before behavior changes, then run `npm test` and commit only the files for that block.
 
 ## Overall Goal
@@ -111,6 +111,13 @@
 - [x] `d899239 Refine TikZ rendering maintenance code`
 - [x] `976e6ea Coalesce TikZ preview render requests`
 - [x] `bc013c6 Harden TikZ render batching`
+- [x] `617a57c Update optimization plan after TikZ work`
+- [x] `b9649a5 Bump version and tune TikZ timeouts`
+- [x] `56072ae Use block hashes for full update diffing`
+- [x] `6bff34e Release far-offscreen PDF canvases`
+- [x] `e76c37e Send full updates as block payloads`
+- [x] `57dd397 Prepare disabled block virtualization plumbing`
+- [x] `aeb0767 Add long document fixture smoke test`
 
 ## Pending: Next Correctness and Architecture Work
 
@@ -122,9 +129,12 @@
   - Keep numbering/reference updates on the existing `payload.numbering -> applyNumbering()` path.
 - [x] 3. Release far-offscreen PDF canvas bitmaps and rerender them when they return near the viewport.
 - [x] 4. Start the full-update payload transition with a low-risk block payload path.
-- [ ] 5. Prepare shell-based block virtualization without turning it on globally.
-- [ ] 6. Split or strengthen tests where the current monolithic suite is making changes risky.
-- [ ] 7. Apply low-risk security and architecture cleanup only where tests can pin behavior.
+- [x] 5. Prepare shell-based block virtualization without turning it on globally.
+- [x] 6. Split or strengthen tests where the current monolithic suite is making changes risky.
+- [x] 7. Apply low-risk security and architecture cleanup only where tests can pin behavior.
+  - Escaped `\maketitle` title/author/date metadata before inserting it into protected HTML.
+  - Kept LaTeX metadata formatting and inline math rendering covered by tests.
+  - Replaced raw metadata rerender fingerprints with stable hash fingerprints.
 
 ### A. Remaining Correctness and Security
 
@@ -153,7 +163,7 @@
   - Unclosed environments.
   - Broken display math.
 - [ ] Harden HTML escaping for user-controlled fields.
-  - title, author, date.
+  - [x] title, author, date.
   - captions.
   - labels and ids.
   - citation keys.
@@ -188,10 +198,11 @@
   - `multi-file/section1.tex`
   - `bibliography/main.tex`
   - `bibliography/main.bib`
-  - `long-doc.tex`
+  - [x] `long-doc.tex`
 - [ ] Add renderer snapshot-style tests for representative blocks.
 - [ ] Add source mapping tests for included files with line offsets and labels.
-- [ ] Add a generated long-document smoke test.
+- [x] Add a fixture-backed long-document smoke test.
+- [ ] Continue splitting the growing monolithic test file into focused files.
 
 ### C. Memory Instrumentation and Low-Risk Wins
 
@@ -301,6 +312,8 @@
 
 ### I. Shell-Based Webview Virtualization
 
+- [x] Add a disabled `snaptex.experimentalVirtualization` setting and webview controller plumbing.
+- [x] Add a block height cache populated before DOM replacement/removal.
 - [ ] Create `.latex-block-shell` elements for every block.
 - [ ] Mount real block HTML only near the viewport.
 - [ ] Unmount far-offscreen blocks while keeping measured height.

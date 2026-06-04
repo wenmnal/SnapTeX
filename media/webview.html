@@ -84,6 +84,34 @@
         }
     }
 
+    class BlockVirtualizationController {
+        constructor(contentRoot) {
+            this.contentRoot = contentRoot;
+            this.enabled = false;
+            this.heightCache = new Map();
+        }
+
+        setEnabled(enabled) {
+            this.enabled = enabled === true;
+        }
+
+        getBlockKey(block) {
+            return block.getAttribute('data-block-hash') || block.getAttribute('data-index');
+        }
+
+        rememberBlockHeight(block) {
+            if (!block) return;
+
+            const key = this.getBlockKey(block);
+            if (!key) return;
+
+            const rect = block.getBoundingClientRect();
+            if (rect.height > 0) {
+                this.heightCache.set(key, Math.ceil(rect.height));
+            }
+        }
+    }
+
     function notifyTikzContainerSettled(container) {
         if (!container || !container.isConnected) return;
         container.dispatchEvent(new CustomEvent('snaptex-tikz-settled', { bubbles: true }));
@@ -681,6 +709,7 @@
             };
             this.pdfObserver = null;
             this.pdfRenderTimer = null;
+            this.virtualization = new BlockVirtualizationController(this.contentRoot);
             this.tikzRenderScheduler = new CoalescingTaskScheduler({
                 debounceMs: TIKZ_RENDER_DEBOUNCE_MS,
                 run: () => this.runTikzRenderBatch(),
@@ -753,6 +782,7 @@
                     if (event.data.config && typeof event.data.config.debugMemory === 'boolean') {
                         this.config.debugMemory = event.data.config.debugMemory;
                     }
+                    this.virtualization.setEnabled(event.data.config.experimentalVirtualization === true);
                     break;
             }
         }
@@ -827,6 +857,7 @@
         }
 
         replaceBlockPreservingTikz(oldBlock, newBlock) {
+            this.virtualization.rememberBlockHeight(oldBlock);
             oldBlock.replaceWith(newBlock);
             this.applyStaleTikzPreviewsToBlock(newBlock, oldBlock);
         }
@@ -1076,7 +1107,13 @@
             for (let i = 0; i < maxLen; i++) {
                 const newEl = newElements[i];
                 const oldEl = oldElements[i];
-                if (!newEl) { if (oldEl) oldEl.remove(); continue; }
+                if (!newEl) {
+                    if (oldEl) {
+                        this.virtualization.rememberBlockHeight(oldEl);
+                        oldEl.remove();
+                    }
+                    continue;
+                }
                 if (!oldEl) { this.contentRoot.appendChild(newEl); continue; }
                 if (this.shouldReplaceBlock(oldEl, newEl, preserveUnchangedBlocks)) {
                     this.replaceBlockPreservingTikz(oldEl, newEl);
@@ -1094,6 +1131,7 @@
                 const block = this.contentRoot.children[start + i];
                 const index = block?.getAttribute('data-index');
                 const previews = this.collectTikzPreviews(block);
+                this.virtualization.rememberBlockHeight(block);
                 if (index !== null && previews.some(Boolean)) {
                     staleTikzByIndex.set(index, previews);
                 }
