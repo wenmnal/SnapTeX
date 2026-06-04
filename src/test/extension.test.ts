@@ -646,6 +646,8 @@ suite('Webview resource loading', () => {
 
         assert.match(webviewSource, /collectTikzPreviews\(block\)/);
         assert.match(webviewSource, /attachStaleTikzPreviews\(block, previews\)/);
+        assert.match(webviewSource, /replaceBlockPreservingTikz\(oldBlock, newBlock\)/);
+        assert.match(webviewSource, /applyStaleTikzPreviewsToBlock\(newBlock, oldBlock\)/);
         assert.match(webviewSource, /preview\.classList\.add\('tikz-stale-preview'\)/);
         assert.match(webviewSource, /container\.querySelectorAll\('\.tikz-stale-preview'\)\.forEach\(preview => preview\.remove\(\)\)/);
         assert.match(webviewSource, /svg\[role="img"\]:not\(\.tikz-stale-preview\)/);
@@ -673,6 +675,10 @@ suite('Webview resource loading', () => {
         const calcLibraryPath = path.join(repoRoot, 'media', 'vendor', 'tikzjax', 'tex_files', 'tikzlibrarycalc.code.tex.gz');
 
         assert.match(buildSource, /patchTikzJaxWorkerBootstrap/);
+        assert.match(buildSource, /function replaceOrThrow/);
+        assert.match(buildSource, /throw new Error\(`\[build\] TikZJax/);
+        assert.doesNotMatch(buildSource, /console\.warn\('\[build\] Warning: TikZJax/);
+        assert.doesNotMatch(buildSource, /require\('zlib'\)/);
         assert.match(buildSource, /CORSWorkaround:!1/);
         assert.ok(fs.existsSync(calcLibraryPath));
         assert.match(tikzJaxSource, /fetch\(`\$\{e\}\/run-tex\.js`\)/);

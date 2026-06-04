@@ -101,7 +101,10 @@
     }
 
     window.failTikzContainer = function(container, message) {
-        if (!container || !container.isConnected || hasRenderedTikz(container)) return;
+        if (!container || !container.isConnected) return;
+        const state = container.getAttribute('data-tikz-state');
+        const isActive = state === 'queued' || state === 'rendering' || state === 'stale';
+        if (hasRenderedTikz(container) && !isActive) return;
 
         clearTikzRenderTimer(container);
         setTikzContainerState(container, 'failed');
@@ -755,6 +758,16 @@
             });
         }
 
+        applyStaleTikzPreviewsToBlock(newBlock, oldBlock) {
+            const previews = this.collectTikzPreviews(oldBlock);
+            this.attachStaleTikzPreviews(newBlock, previews);
+        }
+
+        replaceBlockPreservingTikz(oldBlock, newBlock) {
+            oldBlock.replaceWith(newBlock);
+            this.applyStaleTikzPreviewsToBlock(newBlock, oldBlock);
+        }
+
         // Manually trigger TikZJax to scan the document
         triggerTikzRendering() {
             const pendingTikz = document.querySelector(TIKZ_SCRIPT_SELECTOR);
@@ -931,9 +944,7 @@
                 if (!newEl) { if (oldEl) oldEl.remove(); continue; }
                 if (!oldEl) { this.contentRoot.appendChild(newEl); continue; }
                 if (oldEl.outerHTML !== newEl.outerHTML) {
-                    const previews = this.collectTikzPreviews(oldEl);
-                    oldEl.replaceWith(newEl);
-                    this.attachStaleTikzPreviews(newEl, previews);
+                    this.replaceBlockPreservingTikz(oldEl, newEl);
                 }
             }
         }
@@ -987,13 +998,11 @@
                     const idx = parseInt(indexStr);
                     const targetBlock = document.querySelector('.latex-block[data-index="' + idx + '"]');
                     if (targetBlock) {
-                        const previews = this.collectTikzPreviews(targetBlock);
                         const tempDiv = document.createElement('div');
                         tempDiv.innerHTML = payload.dirtyBlocks[idx];
                         const replacement = tempDiv.firstElementChild;
                         if (replacement) {
-                            targetBlock.replaceWith(replacement);
-                            this.attachStaleTikzPreviews(replacement, previews);
+                            this.replaceBlockPreservingTikz(targetBlock, replacement);
                         }
                     }
                 });
