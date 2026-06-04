@@ -1,7 +1,7 @@
 # SnapTeX Optimization TODO
 
 > Current branch: `dev`  
-> Last verified: `npm test` passed with 34 tests after unwrapping resizeboxed TikZ blocks and adding a TikZ render watchdog.  
+> Last verified: `npm test` passed with 41 tests after the TikZ render batching hardening work.  
 > Rule for future work: keep each change block small, add or update tests before behavior changes, then run `npm test` and commit only the files for that block.
 
 ## Overall Goal
@@ -10,6 +10,19 @@
 - [ ] Reduce the long-document memory model from full source/block text/full HTML/full DOM/PDF/TikZ resources to lightweight block metadata plus changed blocks and viewport-near resources.
 
 ## Completed
+
+### TikZ Rendering Pipeline
+
+- [x] Lazy-load TikZJax only when TikZ scripts are present.
+- [x] Bootstrap TikZJax worker assets through blob URLs so VS Code webview origin checks do not block `run-tex.js`.
+- [x] Keep TikZJax runtime resources cached for the webview session instead of reloading them per picture.
+- [x] Emit pending TikZ scripts as `text/snaptex-tikz` and activate them only when the scheduler is ready.
+- [x] Prune `\usetikzlibrary{...}` per picture using `blockText` and actually used global style definitions.
+- [x] Preserve the previous rendered TikZ SVG while a replacement render is pending.
+- [x] Route TikZ compile failures into the webview error state instead of inserting an invalid image.
+- [x] Add active-render and batch-render watchdogs so stuck TikZ jobs do not permanently block subsequent renders.
+- [x] Coalesce TikZ render requests so edits during a running batch only schedule the latest pending batch.
+- [x] Keep main-preview TikZ scanning scoped to `#content-root`; tooltip TikZ stays on its own immediate path.
 
 ### Correctness and Safety Quick Wins
 
@@ -88,8 +101,30 @@
 - [x] `024456c Fix renderer correctness issues`
 - [x] `500e4ba Harden preview sync and PDF requests`
 - [x] `64ff6c4 Expand core logic test coverage`
+- [x] `1882e1c Handle stuck TikZ renders`
+- [x] `38754b2 Make TikZ watchdog queue-aware`
+- [x] `8759735 Bundle TikZJax worker assets for dynamic loading`
+- [x] `3e2ed85 Reduce TikZJax rerender latency`
+- [x] `402a64b Avoid unused TikZ library loads`
+- [x] `010788a Keep stale TikZ previews during rerender`
+- [x] `b07f0ff Handle TikZJax compile failures cleanly`
+- [x] `d899239 Refine TikZ rendering maintenance code`
+- [x] `976e6ea Coalesce TikZ preview render requests`
+- [x] `bc013c6 Harden TikZ render batching`
 
 ## Pending: Next Correctness and Architecture Work
+
+### Active 1--7 Work Sequence
+
+- [x] 1. Update this TODO after the TikZ work and keep it synchronized after each module.
+- [ ] 2. Add `blockHash = hash(blockText)` for structural block identity.
+  - Do not include numbering, references, PDF/TikZ runtime state, or generated DOM in the hash.
+  - Keep numbering/reference updates on the existing `payload.numbering -> applyNumbering()` path.
+- [ ] 3. Release far-offscreen PDF canvas bitmaps and rerender them when they return near the viewport.
+- [ ] 4. Start the full-update payload transition with a low-risk block payload path.
+- [ ] 5. Prepare shell-based block virtualization without turning it on globally.
+- [ ] 6. Split or strengthen tests where the current monolithic suite is making changes risky.
+- [ ] 7. Apply low-risk security and architecture cleanup only where tests can pin behavior.
 
 ### A. Remaining Correctness and Security
 
@@ -185,6 +220,8 @@
   - Stops repeated TikZJax retries after a worker-load failure in the same webview session.
 - [x] Unwrap `\resizebox{...}{...}{...}` when it only wraps protected TikZ output.
 - [x] Add a TikZ render watchdog so failed or stuck TikZJax jobs do not leave permanent loading indicators.
+- [x] Coalesce TikZ render requests with a short debounce so repeated edits do not queue stale TikZJax jobs.
+- [x] Add a TikZ batch watchdog so one stuck batch does not block future renders.
 - [ ] Reduce full-update frequency.
   - Keep current fixed `> 50` behavior until this is explicitly revisited.
   - Keep full update for macro/metadata-sensitive changes.
@@ -216,10 +253,11 @@
 ### F. Block Hashes and Diff Improvements
 
 - [ ] Add a stable block hash helper.
-- [ ] Include block hash in rendered block HTML and payload metadata.
+- [ ] Include `blockHash = hash(blockText)` in rendered block HTML and payload metadata.
 - [ ] Use hashes to detect unchanged blocks in the webview.
 - [ ] Stop comparing `oldEl.outerHTML !== newEl.outerHTML`.
 - [ ] Add hash-based tests for unchanged DOM preservation.
+- [ ] Keep numbering/reference changes out of block hashes so the existing lightweight numbering patch remains effective.
 
 ### G. Architecture Refactoring
 
