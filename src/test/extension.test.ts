@@ -902,6 +902,7 @@ suite('Webview resource loading', () => {
         const packageSource = fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8');
         const panelSource = fs.readFileSync(path.join(repoRoot, 'src', 'panel.ts'), 'utf8');
         const webviewSource = fs.readFileSync(path.join(repoRoot, 'media', 'webview.html'), 'utf8');
+        const styleSource = fs.readFileSync(path.join(repoRoot, 'media', 'preview-style.css'), 'utf8');
 
         assert.match(packageSource, /"snaptex\.experimentalVirtualization"/);
         assert.match(packageSource, /"default": false/);
@@ -925,6 +926,14 @@ suite('Webview resource loading', () => {
         assert.match(webviewSource, /BLOCK_VIRTUALIZATION_CLEANUP_DELAY_MS/);
         assert.match(webviewSource, /mountShell\(shell, onMissingHtml\)/);
         assert.match(webviewSource, /unmountShell\(shell\)/);
+        assert.match(webviewSource, /lockShellHeight\(shell, height\)/);
+        assert.match(webviewSource, /refreshMountedShellHeight\(shell, options = \{\}\)/);
+        assert.match(webviewSource, /isShellAboveViewport\(shell\)/);
+        assert.match(webviewSource, /this\.lockShellHeight\(shell, reservedHeight\)/);
+        assert.match(webviewSource, /forceHeightUpdate/);
+        assert.doesNotMatch(webviewSource, /shell\.style\.height = ''/);
+        assert.doesNotMatch(webviewSource, /shell\.style\.minHeight = ''/);
+        assert.match(styleSource, /\.latex-block-shell\s*\{[\s\S]*overflow: hidden;/);
         assert.match(webviewSource, /updateMountedShells\(onMount, onMissingHtml, options = \{\}\)/);
         assert.match(webviewSource, /isShellInMountRange\(shell, direction = 'none'\)/);
         assert.match(webviewSource, /isShellInRetainRange\(shell\)/);
@@ -952,7 +961,7 @@ suite('Webview resource loading', () => {
         assert.match(webviewSource, /document\.addEventListener\('click', event => this\.onInternalLinkClick\(event\)\)/);
         assert.match(webviewSource, /async ensureAnchorMounted\(anchorId\)/);
         assert.match(webviewSource, /this\.virtualization\.findShellByAnchorId\(anchorId\)/);
-        assert.match(webviewSource, /await this\.ensureShellMounted\(shell\)/);
+        assert.match(webviewSource, /await this\.ensureShellMounted\(shell, \{ forceHeightUpdate: true \}\)/);
         assert.match(webviewSource, /async onInternalLinkClick\(event\)/);
         assert.match(webviewSource, /event\.preventDefault\(\)/);
         assert.match(webviewSource, /await this\.ensureAnchorMounted\(anchorId\)/);
@@ -971,7 +980,7 @@ suite('Webview resource loading', () => {
         assert.match(extensionSource, /clearPendingAutoSync\(\);\s*if \(editor\) \{ triggerSyncToPreview/);
         assert.match(webviewSource, /this\.scrollCommandSeq = 0/);
         assert.match(webviewSource, /async ensureBlockMountedByIndex\(index\)/);
-        assert.match(webviewSource, /const block = await this\.ensureShellMounted\(shell\)/);
+        assert.match(webviewSource, /const block = await this\.ensureShellMounted\(shell, \{ forceHeightUpdate: true \}\)/);
         assert.match(webviewSource, /async executeScroll\(data\)/);
         assert.match(webviewSource, /const scrollSeq = \+\+this\.scrollCommandSeq/);
         assert.match(webviewSource, /const target = await this\.ensureBlockMountedByIndex\(index\)/);

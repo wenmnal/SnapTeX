@@ -39,6 +39,7 @@
 - [x] Preserve hover tooltip previews by resolving offscreen anchors through the same shell-mount path.
 - [x] Stabilize forward sync by mounting target block HTML and waiting for layout before scrolling.
 - [x] Stabilize upward virtual scrolling with direction-aware preloading and delayed far-offscreen cleanup.
+- [x] Keep mounted virtual shells height-locked so above-viewport hydration does not change document height.
 - [x] Keep existing full block payload and `update_binary` paths as fallbacks while the experimental path is off.
 
 ### Correctness and Safety Quick Wins
@@ -344,6 +345,7 @@
 - [x] Make hover tooltips mount target shells before cloning preview content.
 - [x] Make forward sync mount target shells before calculating block-relative scroll position.
 - [x] Use directional preload and retain windows instead of manual `scrollY` compensation for smoother upward scrolling.
+- [x] Lock shell heights during mount and refresh real measured height only when the shell is not above the viewport.
 - [ ] Make preview-to-editor double-click use shell/block index safely.
 - [x] Add height estimation and hash-based height cache.
 - [ ] Reevaluate `content-visibility` with shell virtualization.

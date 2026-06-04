@@ -175,6 +175,37 @@
             return parseFloat(shell.style.height || shell.style.minHeight || '') || BLOCK_VIRTUALIZATION_DEFAULT_HEIGHT;
         }
 
+        lockShellHeight(shell, height) {
+            const safeHeight = Math.max(1, Math.ceil(height || this.getShellHeightBaseline(shell)));
+            shell.style.height = `${safeHeight}px`;
+            shell.style.minHeight = `${safeHeight}px`;
+            shell.style.overflow = 'hidden';
+            shell._snaptexLastHeight = safeHeight;
+        }
+
+        measureMountedBlockHeight(shell) {
+            const block = this.getShellBlock(shell);
+            if (!block) return this.getShellHeightBaseline(shell);
+            return Math.ceil(block.getBoundingClientRect().height || block.scrollHeight || this.getShellHeightBaseline(shell));
+        }
+
+        isShellAboveViewport(shell) {
+            return shell.getBoundingClientRect().bottom <= 0;
+        }
+
+        refreshMountedShellHeight(shell, options = {}) {
+            if (!this.getShellBlock(shell)) return;
+
+            const height = this.measureMountedBlockHeight(shell);
+            const key = this.getBlockKey(shell);
+            if (key && height > 0) {
+                this.heightCache.set(key, height);
+            }
+            if (options.force || !this.isShellAboveViewport(shell)) {
+                this.lockShellHeight(shell, height);
+            }
+        }
+
         observeShell(shell) {
             if (!shell || !this.resizeObserver || this.observedShells.has(shell)) return;
             shell._snaptexLastHeight = this.getShellHeightBaseline(shell);
@@ -220,7 +251,7 @@
             this.htmlCache.set(key || index, html);
             const cachedHeight = this.heightCache.get(key);
             const estimatedHeight = cachedHeight || this.estimateBlockHeightFromHtml(html);
-            shell.style.minHeight = `${estimatedHeight}px`;
+            this.lockShellHeight(shell, estimatedHeight);
             shell.setAttribute('data-mounted', 'false');
             shell.setAttribute('data-html-loaded', 'true');
             this.setShellAnchors(shell, this.getAnchorIdsFromBlock(block));
@@ -241,7 +272,7 @@
 
             const cachedHeight = this.heightCache.get(meta.hash);
             const estimatedHeight = cachedHeight || this.estimateBlockHeightFromMeta(meta);
-            shell.style.minHeight = `${estimatedHeight}px`;
+            this.lockShellHeight(shell, estimatedHeight);
             this.setShellAnchors(shell, meta.anchors);
             this.observeShell(shell);
             return shell;
@@ -282,7 +313,7 @@
             return this.isShellInMountRange(shell, direction);
         }
 
-        mountShell(shell, onMissingHtml) {
+        mountShell(shell, onMissingHtml, options = {}) {
             if (!this.enabled || this.getShellBlock(shell)) return null;
 
             const key = this.getBlockKey(shell);
@@ -295,13 +326,14 @@
             const block = this.parseBlockHtml(html);
             if (!block) return null;
 
+            const reservedHeight = this.getShellHeightBaseline(shell);
             shell.textContent = '';
             shell.appendChild(block);
-            shell.style.minHeight = '';
-            shell.style.height = '';
+            this.lockShellHeight(shell, reservedHeight);
             shell.setAttribute('data-mounted', 'true');
             shell.setAttribute('data-html-loaded', 'true');
             this.setShellAnchors(shell, this.getAnchorIdsFromBlock(block));
+            this.refreshMountedShellHeight(shell, { force: options.forceHeightUpdate === true });
             return block;
         }
 
@@ -313,8 +345,7 @@
             const key = this.getBlockKey(block);
             const height = this.heightCache.get(key) || Math.ceil(block.getBoundingClientRect().height) || BLOCK_VIRTUALIZATION_DEFAULT_HEIGHT;
             block.remove();
-            shell.style.minHeight = `${height}px`;
-            shell.style.height = `${height}px`;
+            this.lockShellHeight(shell, height);
             shell.setAttribute('data-mounted', 'false');
         }
 
@@ -330,6 +361,8 @@
                     if (block) {
                         mounted.push(block);
                         if (onMount) { onMount(block); }
+                    } else {
+                        this.refreshMountedShellHeight(shell);
                     }
                 } else if (allowUnmount && this.getShellBlock(shell) && !this.isShellInRetainRange(shell)) {
                     this.unmountShell(shell);
@@ -1247,11 +1280,18 @@
             });
         }
 
-        ensureShellMounted(shell) {
+        ensureShellMounted(shell, options = {}) {
             const existingBlock = this.virtualization.getShellBlock(shell);
-            if (existingBlock) return Promise.resolve(existingBlock);
+            if (existingBlock) {
+                this.virtualization.refreshMountedShellHeight(shell, { force: options.forceHeightUpdate === true });
+                return Promise.resolve(existingBlock);
+            }
 
-            const mounted = this.virtualization.mountShell(shell, missingShell => this.requestVirtualBlockHtml(missingShell));
+            const mounted = this.virtualization.mountShell(
+                shell,
+                missingShell => this.requestVirtualBlockHtml(missingShell),
+                { forceHeightUpdate: options.forceHeightUpdate === true }
+            );
             if (mounted) {
                 this.onVirtualBlockMounted(mounted);
                 return Promise.resolve(mounted);
@@ -1266,7 +1306,11 @@
                     resolve(block || null);
                 };
                 const timeout = setTimeout(() => finish(null), 6000);
-                const requested = this.requestVirtualBlockHtml(shell, { forceMount: true, onLoaded: finish });
+                const requested = this.requestVirtualBlockHtml(shell, {
+                    forceMount: true,
+                    forceHeightUpdate: options.forceHeightUpdate === true,
+                    onLoaded: finish
+                });
                 if (!requested) { finish(null); }
             });
         }
@@ -1278,7 +1322,7 @@
             const shell = this.getShellByIndex(index);
             if (!shell) return null;
 
-            const block = await this.ensureShellMounted(shell);
+            const block = await this.ensureShellMounted(shell, { forceHeightUpdate: true });
             return block || shell;
         }
 
@@ -1290,7 +1334,7 @@
             const shell = this.virtualization.findShellByAnchorId(anchorId);
             if (!shell) return null;
 
-            await this.ensureShellMounted(shell);
+            await this.ensureShellMounted(shell, { forceHeightUpdate: true });
             if (this.currentNumbering) {
                 await new Promise(resolve => requestAnimationFrame(resolve));
             }
@@ -1329,6 +1373,7 @@
                 const pending = this.pendingBlockHtmlRequests.get(existingId);
                 if (requestOptions.onLoaded) { pending.callbacks.push(requestOptions.onLoaded); }
                 pending.forceMount = pending.forceMount || requestOptions.forceMount === true;
+                pending.forceHeightUpdate = pending.forceHeightUpdate || requestOptions.forceHeightUpdate === true;
                 return true;
             }
 
@@ -1343,6 +1388,7 @@
                 index,
                 hash,
                 forceMount: requestOptions.forceMount === true,
+                forceHeightUpdate: requestOptions.forceHeightUpdate === true,
                 callbacks: requestOptions.onLoaded ? [requestOptions.onLoaded] : []
             });
             vscode.postMessage({ command: 'requestBlockHtml', id, index, hash });
@@ -1377,7 +1423,11 @@
             }
             if (!pending?.forceMount && !this.virtualization.isShellNearViewport(shell, this.scrollDirection)) return;
 
-            const block = this.virtualization.mountShell(shell, missingShell => this.requestVirtualBlockHtml(missingShell));
+            const block = this.virtualization.mountShell(
+                shell,
+                missingShell => this.requestVirtualBlockHtml(missingShell),
+                { forceHeightUpdate: pending?.forceHeightUpdate === true }
+            );
             if (block) { this.onVirtualBlockMounted(block); }
             pending?.callbacks?.forEach(callback => callback(block || null));
         }
