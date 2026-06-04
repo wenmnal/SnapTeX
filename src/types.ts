@@ -61,7 +61,10 @@ export interface RenderContext {
     globalLabelMap: Record<string, string>;
     citedKeys: string[];
     bibEntries: Map<string, BibEntry>;
+    // Low-level placeholder primitive for non-HTML tokens that need to survive preprocessing.
     protect(namespace: string, content: string): string;
+    // Preserve renderer-generated HTML through the raw-HTML-disabled Markdown pass.
+    protectHtml(namespace: string, html: string): string;
     renderInline(text: string): string;
     resolveCitation(key: string): number;
 }

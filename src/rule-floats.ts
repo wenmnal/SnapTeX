@@ -35,7 +35,7 @@ export function createFigureRule(): PreprocessRule {
                 });
 
                 const finalHtml = `<div class="latex-figure" style="text-align: center; margin: 1em 0;">${body}${captionHtml}${hiddenHtml}</div>`;
-                return `\n\n${renderer.protect('fig', finalHtml)}\n\n`;
+                return `\n\n${renderer.protectHtml('fig', finalHtml)}\n\n`;
             });
         }
     };
@@ -88,7 +88,7 @@ export function createAlgorithmRule(): PreprocessRule {
                             }
                         }
 
-                        contentToRender = resolveLatexStyles(contentToRender, html => renderer.protect('style', html));
+                        contentToRender = resolveLatexStyles(contentToRender, html => renderer.protectHtml('style', html));
                         const renderedContent = renderer.renderInline(contentToRender);
                         const itemClass = isSpecialLine ? "alg-item alg-item-no-marker" : "alg-item";
                         listItems += `<li class="${itemClass}">${prefixHtml}${renderedContent}</li>`;
@@ -106,7 +106,7 @@ export function createAlgorithmRule(): PreprocessRule {
                 ignoredContent += content.substring(lastIdx);
 
                 const hiddenLabels = recoverPreservedTokens(ignoredContent);
-                return `\n\n${renderer.protect('alg', `<div class="latex-algorithm">${captionHtml}${bodyHtml}${hiddenLabels}<div class="alg-bottom-rule"></div></div>`)}\n\n`;
+                return `\n\n${renderer.protectHtml('alg', `<div class="latex-algorithm">${captionHtml}${bodyHtml}${hiddenLabels}<div class="alg-bottom-rule"></div></div>`)}\n\n`;
             });
         }
     };
@@ -199,7 +199,7 @@ export function createTableRule(): PreprocessRule {
                         const rows = rawContent.split(/\\\\(?:\[.*?\])?/).filter((row: string) => row.trim().length > 0).map((rowText: string) => {
                             const cells = rowText.split('&').map((cell: string) => {
                                 const cellAttrs = 'style="padding: 5px 10px; border: 1px solid #ddd;"';
-                                const cellContent = resolveLatexStyles(cell.trim(), html => renderer.protect('style', html));
+                                const cellContent = resolveLatexStyles(cell.trim(), html => renderer.protectHtml('style', html));
                                 return `<td ${cellAttrs}>${renderer.renderInline(cellContent)}</td>`;
                             });
                             return `<tr>${cells.join('')}</tr>`;
@@ -212,7 +212,7 @@ export function createTableRule(): PreprocessRule {
                 const ignoredContent = innerContent.substring(0, tabularRegion.start) + innerContent.substring(tabularRegion.end);
                 const hiddenLabels = recoverPreservedTokens(ignoredContent);
 
-                return `\n\n${renderer.protect('tbl', `<div class="latex-table">${captionHtml}<div class="table-body">${tableHtml}</div>${notesHtml}${hiddenLabels}</div>`)}\n\n`;
+                return `\n\n${renderer.protectHtml('tbl', `<div class="latex-table">${captionHtml}<div class="table-body">${tableHtml}</div>${notesHtml}${hiddenLabels}</div>`)}\n\n`;
             });
         }
     };

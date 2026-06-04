@@ -132,6 +132,10 @@ export class SmartRenderer {
         return this.protector.protect(namespace, content);
     }
 
+    public protectHtml(namespace: string, html: string): string {
+        return this.protect(namespace, html);
+    }
+
     public isKnownFile(uriStr: string): boolean {
         if (!this.currentDocument) { return false; }
         const target = normalizeUri(uriStr);

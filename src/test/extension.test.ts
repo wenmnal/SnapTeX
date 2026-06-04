@@ -694,6 +694,19 @@ suite('SmartRenderer', () => {
         assert.doesNotMatch(rendererSource, /lastBlockTexts/);
     });
 
+    test('uses explicit HTML protection in rule modules', () => {
+        const repoRoot = path.resolve(__dirname, '..', '..');
+        const ruleSource = [
+            'rules.ts',
+            'rule-floats.ts',
+            'rule-tikz.ts',
+            'rule-helpers.ts'
+        ].map(file => fs.readFileSync(path.join(repoRoot, 'src', file), 'utf8')).join('\n');
+
+        assert.match(ruleSource, /protectHtml\(/);
+        assert.doesNotMatch(ruleSource, /\.\s*protect\(/);
+    });
+
     test('returns patch payloads for small localized edits', () => {
         const renderer = new SmartRenderer();
         renderer.render(createDocument(['A', 'B', 'C']));
