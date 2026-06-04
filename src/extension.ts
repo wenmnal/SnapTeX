@@ -16,6 +16,7 @@ let isSyncingFromPreview = false;
 let syncLockTimer: NodeJS.Timeout | undefined;
 let isEditorScrolling = false;
 let scrollEndTimer: NodeJS.Timeout | undefined;
+let autoSyncTimer: NodeJS.Timeout | undefined;
 let currentRenderedUri: vscode.Uri | undefined = undefined;
 let activeCursorScreenRatio: number = 0.5;
 
@@ -93,6 +94,26 @@ export function activate(context: vscode.ExtensionContext) {
         TexPreviewPanel.currentPanel.postMessage({
             command: 'scrollToBlock', index, ratio, anchor, auto: isAutoScroll, viewRatio
         });
+    };
+
+    const clearPendingAutoSync = () => {
+        if (autoSyncTimer) {
+            clearTimeout(autoSyncTimer);
+            autoSyncTimer = undefined;
+        }
+    };
+
+    const scheduleAutoSyncToPreview = (
+        editor: vscode.TextEditor,
+        targetLine: number,
+        viewRatio: number,
+        targetChar?: number
+    ) => {
+        clearPendingAutoSync();
+        autoSyncTimer = setTimeout(() => {
+            autoSyncTimer = undefined;
+            triggerSyncToPreview(editor, targetLine, true, viewRatio, targetChar);
+        }, getAutoScrollDelay());
     };
 
     /**
@@ -175,6 +196,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(vscode.commands.registerCommand('snaptex.syncToPreview', () => {
         const editor = vscode.window.activeTextEditor;
+        clearPendingAutoSync();
         if (editor) { triggerSyncToPreview(editor, editor.selection.active.line, false, activeCursorScreenRatio, editor.selection.active.character); }
     }));
 
@@ -277,8 +299,7 @@ export function activate(context: vscode.ExtensionContext) {
         const currentConfig = vscode.workspace.getConfiguration('snaptex');
         if (!currentConfig.get<boolean>('autoScrollSync', true)) { return; }
 
-        // Use a simpler debounce here (inline is fine for simple scroll events, but could be optimized similarly)
-        setTimeout(() => triggerSyncToPreview(e.textEditor, sel.line, true, activeCursorScreenRatio, sel.character), getAutoScrollDelay());
+        scheduleAutoSyncToPreview(e.textEditor, sel.line, activeCursorScreenRatio, sel.character);
     }));
 
     context.subscriptions.push(vscode.window.onDidChangeTextEditorVisibleRanges(e => {
@@ -290,14 +311,11 @@ export function activate(context: vscode.ExtensionContext) {
         if (scrollEndTimer) {clearTimeout(scrollEndTimer);}
         scrollEndTimer = setTimeout(() => { isEditorScrolling = false; }, getAutoScrollDelay());
 
-        // Throttle
-        setTimeout(() => {
-            if (e.visibleRanges.length > 0) {
-                const range = e.visibleRanges[0];
-                const targetLine = Math.floor(range.start.line + ((range.end.line - range.start.line) * activeCursorScreenRatio));
-                triggerSyncToPreview(e.textEditor, targetLine, true, activeCursorScreenRatio);
-            }
-        }, getAutoScrollDelay());
+        if (e.visibleRanges.length > 0) {
+            const range = e.visibleRanges[0];
+            const targetLine = Math.floor(range.start.line + ((range.end.line - range.start.line) * activeCursorScreenRatio));
+            scheduleAutoSyncToPreview(e.textEditor, targetLine, activeCursorScreenRatio);
+        }
     }));
 
     context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(doc => {

@@ -919,9 +919,15 @@ suite('Webview resource loading', () => {
         assert.match(webviewSource, /data-html-requested/);
         assert.match(webviewSource, /className = 'latex-block-shell'/);
         assert.match(webviewSource, /data-mounted/);
-        assert.match(webviewSource, /mountShell\(shell\)/);
-        assert.match(webviewSource, /unmountShell\(shell\)/);
-        assert.match(webviewSource, /updateMountedShells\(onMount\)/);
+        assert.match(webviewSource, /mountShell\(shell, onMissingHtml, options = \{\}\)/);
+        assert.match(webviewSource, /unmountShell\(shell, options = \{\}\)/);
+        assert.match(webviewSource, /updateMountedShells\(onMount, onMissingHtml\)/);
+        assert.match(webviewSource, /withScrollCompensation\(shell, action\)/);
+        assert.match(webviewSource, /window\.scrollBy\(0, delta\)/);
+        assert.match(webviewSource, /preserveScroll: true/);
+        assert.match(webviewSource, /this\.resizeObserver = typeof ResizeObserver !== 'undefined'/);
+        assert.match(webviewSource, /onShellResize\(entries\)/);
+        assert.match(webviewSource, /this\.virtualization\.unobserveShell\(shell\)/);
         assert.match(webviewSource, /replaceContentWithShells\(blocks, onMount\)/);
         assert.match(webviewSource, /replaceContentWithBlockMetadata\(blocks, onMount, onMissingHtml\)/);
         assert.match(webviewSource, /storeBlockHtml\(index, hash, html\)/);
@@ -947,6 +953,25 @@ suite('Webview resource loading', () => {
         assert.match(webviewSource, /await this\.ensureAnchorMounted\(anchorId\)/);
         assert.match(webviewSource, /async resolveTargetElement\(targetId\)/);
         assert.match(webviewSource, /controller\.ensureAnchorMounted\(targetId\)/);
+    });
+
+    test('stabilizes virtualized forward sync before scrolling', () => {
+        const repoRoot = path.resolve(__dirname, '..', '..');
+        const extensionSource = fs.readFileSync(path.join(repoRoot, 'src', 'extension.ts'), 'utf8');
+        const webviewSource = fs.readFileSync(path.join(repoRoot, 'media', 'webview.html'), 'utf8');
+
+        assert.match(extensionSource, /let autoSyncTimer: NodeJS\.Timeout \| undefined/);
+        assert.match(extensionSource, /const clearPendingAutoSync = \(\) =>/);
+        assert.match(extensionSource, /const scheduleAutoSyncToPreview = \(/);
+        assert.match(extensionSource, /clearPendingAutoSync\(\);\s*if \(editor\) \{ triggerSyncToPreview/);
+        assert.match(webviewSource, /this\.scrollCommandSeq = 0/);
+        assert.match(webviewSource, /async ensureBlockMountedByIndex\(index\)/);
+        assert.match(webviewSource, /const block = await this\.ensureShellMounted\(shell\)/);
+        assert.match(webviewSource, /async executeScroll\(data\)/);
+        assert.match(webviewSource, /const scrollSeq = \+\+this\.scrollCommandSeq/);
+        assert.match(webviewSource, /const target = await this\.ensureBlockMountedByIndex\(index\)/);
+        assert.match(webviewSource, /await this\.waitForLayout\(\)/);
+        assert.doesNotMatch(webviewSource, /setTimeout\(\(\) => \{[\s\S]*const newTargetY = calcY\(\)/);
     });
 
     test('routes TikZ compile failures through the webview error state', () => {

@@ -37,6 +37,8 @@
 - [x] Validate requested block index/hash before returning block HTML to the webview.
 - [x] Preserve internal `\ref`/citation jumps by indexing anchors on virtual block shells and mounting the target on demand.
 - [x] Preserve hover tooltip previews by resolving offscreen anchors through the same shell-mount path.
+- [x] Stabilize forward sync by mounting target block HTML and waiting for layout before scrolling.
+- [x] Stabilize upward virtual scrolling by compensating scroll position when offscreen shell heights change.
 - [x] Keep existing full block payload and `update_binary` paths as fallbacks while the experimental path is off.
 
 ### Correctness and Safety Quick Wins
@@ -340,6 +342,8 @@
 - [x] Make editor-to-preview sync target shells first, then refine after mount.
 - [x] Make `\ref`/citation anchor clicks mount target shells before scrolling.
 - [x] Make hover tooltips mount target shells before cloning preview content.
+- [x] Make forward sync mount target shells before calculating block-relative scroll position.
+- [x] Compensate scroll position for above-viewport shell mount/unmount and async resize changes.
 - [ ] Make preview-to-editor double-click use shell/block index safely.
 - [x] Add height estimation and hash-based height cache.
 - [ ] Reevaluate `content-visibility` with shell virtualization.
