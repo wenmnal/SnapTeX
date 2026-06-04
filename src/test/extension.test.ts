@@ -267,6 +267,39 @@ suite('BibTexParser', () => {
         assert.ok(entry);
         assert.equal(BibTexParser.getShortAuthor(entry), 'Muller <em>et al.</em>');
     });
+
+    test('escapes formatted bibliography fields and rejects unsafe URLs', () => {
+        const renderer = new SmartRenderer();
+        const entry = {
+            key: 'unsafe',
+            type: 'article',
+            fields: {
+                author: 'Eve <img src=x onerror=alert(1)>',
+                title: '\\textbf{Bold <script>alert(1)</script>}',
+                journal: 'Journal & Review',
+                year: '2026"><script>',
+                doi: '10.1/example" onclick="alert(1)<x>'
+            }
+        };
+
+        const html = renderer.protector.resolve(BibTexParser.formatEntry(entry, renderer));
+
+        assert.doesNotMatch(html, /<script|<img|onclick="/i);
+        assert.match(html, /Eve &lt;img src=x onerror=alert\(1\)&gt;/);
+        assert.match(html, /<b>Bold &lt;script&gt;alert\(1\)&lt;\/script&gt;<\/b>/);
+        assert.match(html, /2026&quot;&gt;&lt;script&gt;/);
+        assert.match(html, /href="https:\/\/doi\.org\/10\.1\/example%22%20onclick=%22alert\(1\)%3Cx%3E"/);
+
+        const unsafeUrlEntry = {
+            key: 'bad-url',
+            type: 'misc',
+            fields: {
+                title: 'Unsafe URL',
+                url: 'javascript:alert(1)'
+            }
+        };
+        assert.doesNotMatch(BibTexParser.formatEntry(unsafeUrlEntry, renderer), /href=/i);
+    });
 });
 
 suite('LaTeX style utilities', () => {
@@ -302,8 +335,15 @@ suite('LaTeX style utilities', () => {
         });
 
         assert.match(cleaned, /M.ller/);
-        assert.match(cleaned, /<b>Bold<\/b>/);
+        assert.doesNotMatch(cleaned, /<b>Bold<\/b>/);
+        assert.match(protector.resolve(cleaned), /<b>Bold<\/b>/);
         assert.match(protector.resolve(cleaned), /<span>math<\/span>/);
+
+        const unsafe = cleanLatexCommands('\\textbf{<script>alert(1)</script>} <img src=x>', {
+            protect: (namespace: string, content: string) => protector.protect(namespace, content)
+        });
+        assert.doesNotMatch(protector.resolve(unsafe), /<script|<img/i);
+        assert.match(protector.resolve(unsafe), /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
     });
 
     test('post-processes abstract and keyword sentinel blocks', () => {
@@ -762,6 +802,36 @@ suite('SmartRenderer', () => {
         assert.match(html, /class="katex"/);
     });
 
+    test('escapes raw source HTML while preserving generated preview HTML', () => {
+        const html = renderBlocks([
+            'Plain <img src=x onerror=alert(1)> and \\textbf{bold}.',
+            '\\begin{theorem}<script>alert(1)</script> and \\emph{safe}.\\end{theorem}'
+        ]);
+
+        assert.doesNotMatch(html, /<img|<script/i);
+        assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
+        assert.match(html, /<strong>bold<\/strong>/);
+        assert.match(html, /class="latex-theorem"/);
+        assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+        assert.match(html, /<em>safe<\/em>/);
+    });
+
+    test('does not trust KaTeX HTML-producing commands by default', () => {
+        const html = renderBlocks(['$\\href{javascript:alert(1)}{bad}$']);
+
+        assert.doesNotMatch(html, /href="javascript:alert/i);
+    });
+
+    test('keeps numbered display math containers protected under raw-HTML-disabled Markdown', () => {
+        const html = renderBlocks(['\\begin{equation}\\label{obj:inSample}x=1\\end{equation}']);
+
+        assert.match(html, /<div class="equation-container"/);
+        assert.match(html, /<span class="eq-no"/);
+        assert.match(html, /id="obj:inSample"/);
+        assert.doesNotMatch(html, /&lt;div class=&quot;equation-container/);
+        assert.doesNotMatch(html, /&lt;span class=&quot;eq-no/);
+    });
+
     test('updates maketitle metadata without exposing raw metadata in block hashes', () => {
         const renderer = new SmartRenderer();
         renderer.render(createDocument(['\\maketitle'], { title: 'First' }));
@@ -828,6 +898,21 @@ suite('SmartRenderer', () => {
         assert.equal(html.match(/class="latex-block/g)?.length ?? 0, 2);
     });
 
+    test('escapes includegraphics paths before inserting them into attributes', () => {
+        const html = renderBlocks([
+            [
+                '\\begin{figure}',
+                '\\includegraphics{figures/a" onerror="alert(1).pdf}',
+                '\\includegraphics{figures/b" onload="alert(1).png}',
+                '\\end{figure}'
+            ].join('\n')
+        ]);
+
+        assert.match(html, /data-req-path="figures\/a&quot; onerror=&quot;alert\(1\)\.pdf"/);
+        assert.match(html, /src="LOCAL_IMG:figures\/b&quot; onload=&quot;alert\(1\)\.png"/);
+        assert.doesNotMatch(html, /\s(?:onerror|onload)="/i);
+    });
+
     test('renders reference and citation edge cases', () => {
         const doc = createDocument([
             [
@@ -874,6 +959,19 @@ suite('SmartRenderer', () => {
         assert.match(html, /class="tikz-container"/);
         assert.match(html, /<script type="text\/snaptex-tikz"/);
         assert.doesNotMatch(html, /\\resizebox/);
+    });
+
+    test('escapes TikZ script terminators without dropping the original code', () => {
+        const html = renderBlocks([
+            [
+                '\\begin{tikzpicture}',
+                '\\node {</script><img src=x onerror=alert(1)>};',
+                '\\end{tikzpicture}'
+            ].join('\n')
+        ]);
+
+        assert.equal(html.match(/<\/script>/gi)?.length ?? 0, 1);
+        assert.match(html, /<\\\/script><img src=x onerror=alert\(1\)>/);
     });
 
     test('injects only TikZ libraries used by each picture', () => {
@@ -1123,6 +1221,25 @@ suite('Webview resource loading', () => {
         assert.match(panelSource, /const webviewPdfUri = toUri\('media\/webview-pdf\.js'\)/);
         assert.match(buildSource, /entryPoints: \['src\/webview\/main\.ts'\]/);
         assert.match(buildSource, /entryPoints: \['src\/webview\/pdf\.ts'\]/);
+    });
+
+    test('keeps the webview CSP on bundled resources instead of remote script/connect sources', () => {
+        const repoRoot = path.resolve(__dirname, '..', '..');
+        const htmlSource = fs.readFileSync(path.join(repoRoot, 'media', 'webview.html'), 'utf8');
+
+        assert.doesNotMatch(htmlSource, /https:\/\/unpkg\.com/);
+        assert.doesNotMatch(htmlSource, /script-src[^;]*https:/);
+        assert.doesNotMatch(htmlSource, /connect-src[^;]*https:/);
+    });
+
+    test('keeps renderOnSwitch fallbacks aligned with the contributed default', () => {
+        const repoRoot = path.resolve(__dirname, '..', '..');
+        const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
+        const extensionSource = fs.readFileSync(path.join(repoRoot, 'src', 'extension.ts'), 'utf8');
+
+        assert.equal(packageJson.contributes.configuration.properties['snaptex.renderOnSwitch'].default, false);
+        assert.doesNotMatch(extensionSource, /get<boolean>\('renderOnSwitch', true\)/);
+        assert.match(extensionSource, /get<boolean>\('renderOnSwitch', false\)/);
     });
 
     test('lazy-loads TikZJax only when TikZ scripts are present', () => {

@@ -10,7 +10,7 @@ export function renderMath(tex: string, displayMode: boolean, renderer: RenderCo
             throwOnError: false,
             errorColor: '#cc0000',
             globalGroup: true,
-            trust: true
+            trust: false
         });
         return renderer.protect('math', html);
     } catch (e) {
@@ -42,7 +42,7 @@ export function renderCaptionContent(captionText: string, renderer: RenderContex
     const withMath = captionText.replace(/\$((?:\\.|[^\\$])+?)\$/g, (_match: string, content: string) => {
         return renderMath(content.trim(), false, renderer);
     });
-    return renderer.renderInline(resolveLatexStyles(withMath));
+    return renderer.renderInline(resolveLatexStyles(withMath, html => renderer.protect('style', html)));
 }
 
 export function unwrapResizeboxAroundProtectedContent(text: string): string {

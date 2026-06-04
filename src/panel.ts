@@ -28,6 +28,15 @@ function logHostMemory(label: string) {
     });
 }
 
+function decodeHtmlAttribute(value: string): string {
+    return value
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&amp;/g, '&');
+}
+
 export function normalizePdfRequestPath(input: unknown): string | undefined {
     if (typeof input !== 'string') {
         return undefined;
@@ -249,7 +258,7 @@ export class TexPreviewPanel {
 
         const docDir = vscode.Uri.joinPath(this._sourceUri, '..');
         return html.replace(/(src|data-pdf-src)="LOCAL_IMG:([^"]+)"/g, (match, attr, relPath) => {
-            let normalizedPath = relPath.replace(/\\/g, '/');
+            let normalizedPath = decodeHtmlAttribute(relPath).replace(/\\/g, '/');
             if (normalizedPath.startsWith('./')) { normalizedPath = normalizedPath.substring(2); }
 
             const pathSegments = normalizedPath.split('/');

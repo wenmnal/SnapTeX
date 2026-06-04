@@ -74,7 +74,7 @@ export class SmartRenderer {
             "\\mathsection": "\\S",
             ...macros
         };
-        this.md = new MarkdownIt({ html: true, linkify: true });
+        this.md = new MarkdownIt({ html: false, linkify: true });
         this.md.disable('code');
     }
 

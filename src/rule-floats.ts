@@ -1,5 +1,5 @@
 import { PreprocessRule, RenderContext } from './types';
-import { extractAndHideLabels, findBalancedClosingBrace, findCommand, resolveLatexStyles } from './utils';
+import { escapeHtmlAttribute, extractAndHideLabels, findBalancedClosingBrace, findCommand, resolveLatexStyles } from './utils';
 import { recoverPreservedTokens, renderCaptionContent, renderMath, unwrapResizeboxAroundProtectedContent } from './rule-helpers';
 
 export function createFigureRule(): PreprocessRule {
@@ -25,12 +25,13 @@ export function createFigureRule(): PreprocessRule {
 
                 body = body.replace(/\\includegraphics(?:\[.*?\])?\s*\{([^}]+)\}/g, (_imgMatch: string, imgPath: string) => {
                     const cleanPath = imgPath.trim();
+                    const safePath = escapeHtmlAttribute(cleanPath);
                     const canvasId = `pdf-${Math.random().toString(36).substr(2, 9)}`;
 
                     if (cleanPath.toLowerCase().endsWith('.pdf')) {
-                        return `<canvas id="${canvasId}" data-req-path="${cleanPath}" style="width:100%; max-width:100%; display:block; margin:0 auto;"></canvas>`;
+                        return `<canvas id="${canvasId}" data-req-path="${safePath}" style="width:100%; max-width:100%; display:block; margin:0 auto;"></canvas>`;
                     }
-                    return `<img src="LOCAL_IMG:${cleanPath}" style="max-width:100%; display:block; margin:0 auto;">`;
+                    return `<img src="LOCAL_IMG:${safePath}" style="max-width:100%; display:block; margin:0 auto;">`;
                 });
 
                 const finalHtml = `<div class="latex-figure" style="text-align: center; margin: 1em 0;">${body}${captionHtml}${hiddenHtml}</div>`;
@@ -87,7 +88,7 @@ export function createAlgorithmRule(): PreprocessRule {
                             }
                         }
 
-                        contentToRender = resolveLatexStyles(contentToRender);
+                        contentToRender = resolveLatexStyles(contentToRender, html => renderer.protect('style', html));
                         const renderedContent = renderer.renderInline(contentToRender);
                         const itemClass = isSpecialLine ? "alg-item alg-item-no-marker" : "alg-item";
                         listItems += `<li class="${itemClass}">${prefixHtml}${renderedContent}</li>`;
@@ -198,7 +199,7 @@ export function createTableRule(): PreprocessRule {
                         const rows = rawContent.split(/\\\\(?:\[.*?\])?/).filter((row: string) => row.trim().length > 0).map((rowText: string) => {
                             const cells = rowText.split('&').map((cell: string) => {
                                 const cellAttrs = 'style="padding: 5px 10px; border: 1px solid #ddd;"';
-                                const cellContent = resolveLatexStyles(cell.trim());
+                                const cellContent = resolveLatexStyles(cell.trim(), html => renderer.protect('style', html));
                                 return `<td ${cellAttrs}>${renderer.renderInline(cellContent)}</td>`;
                             });
                             return `<tr>${cells.join('')}</tr>`;

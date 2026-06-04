@@ -4,12 +4,12 @@
     <meta charset="UTF-8">
     <meta http-equiv="Content-Security-Policy" content="
         default-src 'none';
-        script-src {{cspSource}} 'unsafe-inline' 'unsafe-eval' blob: https://unpkg.com;
+        script-src {{cspSource}} 'unsafe-inline' 'unsafe-eval' blob:;
         worker-src {{cspSource}} blob:;
         style-src {{cspSource}} 'unsafe-inline';
         font-src {{cspSource}} data:;
-        img-src {{cspSource}} https: data: blob:;
-        connect-src {{cspSource}} blob: https:;
+        img-src {{cspSource}} data: blob:;
+        connect-src {{cspSource}} blob:;
     ">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="{{katexCssUri}}">

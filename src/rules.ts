@@ -112,16 +112,17 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 const afterMatch = fullString.substring(offset + match.length);
                 const isFollowedByText = /^\s*\S/.test(afterMatch) && !/^\s*\n\n/.test(afterMatch);
 
-                let result = protectedTag + hiddenHtml;
+                const hiddenLabels = hiddenHtml ? renderer.protect('raw', hiddenHtml) : '';
+                let result = protectedTag + hiddenLabels;
                 if (eqNumHTML) {
-                    result = `<div class="equation-container" style="position: relative; width: 100%;">
+                    result = renderer.protect('math-block', `<div class="equation-container" style="position: relative; width: 100%;">
                                 ${protectedTag}
                                 <span class="eq-no" style="position: absolute; right: 0; top: 50%; transform: translateY(-50%); pointer-events: none;">
                                     ${eqNumHTML}
                                 </span>
-                            </div>${hiddenHtml}`;
+                            </div>${hiddenLabels}`);
                 }
-                return result + (isFollowedByText ? '<span class="no-indent-marker"></span>' : '');
+                return result + (isFollowedByText ? renderer.protect('raw', '<span class="no-indent-marker"></span>') : '');
             });
         }
     },
@@ -183,13 +184,15 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 let post = '';
                 if (opt2 !== undefined) { pre = opt1 ? opt1 + ' ' : ''; post = opt2; }
                 else if (opt1 !== undefined) { post = opt1; }
+                const safePre = escapeHtml(pre);
+                const safePost = escapeHtml(post);
 
                 const parts = keyArray.map((key: string) => {
                     renderer.resolveCitation(key);
                     const entry = renderer.bibEntries.get(key);
                     if (!entry) { return { error: true, key, author: "unknown", year: "unknown" }; }
                     const author = BibTexParser.getShortAuthor(entry);
-                    const year = entry.fields.year || "unknown";
+                    const year = escapeHtml(entry.fields.year || "unknown");
                     return { error: false, key, author, year };
                 });
 
@@ -202,29 +205,29 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 if (cmd === 'citet') {
                     const formatted = parts.map((p: any, i: number) => {
                         const isLast = i === parts.length - 1;
-                        if (p.error) { return `[${p.key}?]`; }
+                        if (p.error) { return `[${escapeHtml(p.key)}?]`; }
                         let yearText = p.year;
-                        if (isLast && post) { yearText += `, ${post}`; }
+                        if (isLast && safePost) { yearText += `, ${safePost}`; }
                         return `${p.author} (${mkLink(yearText, p.key)})`;
                     }).join(', ');
-                    finalHtml = pre + formatted;
+                    finalHtml = safePre + formatted;
                 } else if (cmd === 'citeyear') {
                     const formatted = parts.map((p: any, i: number) => {
                         const isLast = i === parts.length - 1;
-                        if (p.error) { return `[${p.key}?]`; }
+                        if (p.error) { return `[${escapeHtml(p.key)}?]`; }
                         let yearText = p.year;
-                        if (isLast && post) { yearText += `, ${post}`; }
+                        if (isLast && safePost) { yearText += `, ${safePost}`; }
                         return mkLink(yearText, p.key);
                     }).join(', ');
-                    finalHtml = pre + formatted;
+                    finalHtml = safePre + formatted;
                 } else {
                     const inner = parts.map((p: any) => {
-                        if (p.error) { return `[${p.key}?]`; }
+                        if (p.error) { return `[${escapeHtml(p.key)}?]`; }
                         return mkLink(`${p.author}, ${p.year}`, p.key);
                     }).join('; ');
                     let content = inner;
-                    if (pre) { content = pre + content; }
-                    if (post) { content = content + ', ' + post; }
+                    if (safePre) { content = safePre + content; }
+                    if (safePost) { content = content + ', ' + safePost; }
                     finalHtml = `(${content})`;
                 }
 
@@ -241,7 +244,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         apply: (text, renderer: RenderContext) => {
             return text.replace(new RegExp(R_BIBLIOGRAPHY, 'g'), (match, file) => {
                 if (renderer.citedKeys.length === 0) {
-                    return `<div class="latex-bibliography error">No citations found.</div>`;
+                    return renderer.protect('bib', `<div class="latex-bibliography error">No citations found.</div>`);
                 }
                 const uniqueKeys = Array.from(new Set(renderer.citedKeys));
                 const sortedKeys = uniqueKeys.sort((a, b) => {
@@ -342,19 +345,21 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 let header = `<span class="latex-thm-head"><strong class="latex-theorem-header">${displayName} <span class="sn-cnt" data-type="thm"></span>`;
 
                 if (optArg) {
-                    header += `</strong>&nbsp;(${optArg}).</span>&nbsp; `;
+                    header += `</strong>&nbsp;(${escapeHtml(optArg)}).</span>&nbsp; `;
                 } else {
                     header += `.</strong></span>&nbsp; `;
                 }
 
-                return `\n\n<div class="latex-theorem">\n\n${header}${content.trim()}\n\n</div>\n\n`;
+                let body = resolveLatexStyles(content.trim(), html => renderer.protect('style', html));
+                body = escapeHtml(body);
+                return `\n\n${renderer.protect('thm', `<div class="latex-theorem">${header}${body}</div>`)}\n\n`;
             });
 
             text = text.replace(/\\begin\{proof\}(?:\[(.*?)\])?/gi, (match, optArg) => {
-                const title = optArg ? `Proof (${optArg}).` : `Proof.`;
-                return `\n<span class="no-indent-marker"></span>**${title}** `;
+                const title = optArg ? `Proof (${escapeHtml(optArg)}).` : `Proof.`;
+                return `\n${renderer.protect('raw', '<span class="no-indent-marker"></span>')}**${title}** `;
             });
-            return text.replace(/\\end\{proof\}/gi, () => ` <span style="float:right;">QED</span>\n`);
+            return text.replace(/\\end\{proof\}/gi, () => ` ${renderer.protect('raw', '<span style="float:right;">QED</span>')}\n`);
         }
     },
 
@@ -374,8 +379,8 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                     let res = val.replace(/<br\s*\/?>/gi, lineBreakToken);
                     res = res.replace(/\\\\/g, lineBreakToken);
                     res = res.replace(/\$((?:\\.|[^\\$])+?)\$/g, (m: string, c: string) => renderMath(c.trim(), false, renderer));
+                    res = resolveLatexStyles(res, html => renderer.protect('style', html));
                     res = escapeHtml(res);
-                    res = resolveLatexStyles(res);
                     return res;
                 };
 
@@ -469,7 +474,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         name: 'text_styles',
         priority: 190,
         apply: (text, renderer: RenderContext) => {
-            return resolveLatexStyles(text);
+            return resolveLatexStyles(text, html => renderer.protect('style', html));
         }
     }
 ];
