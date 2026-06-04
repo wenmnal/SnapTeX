@@ -37,7 +37,10 @@
     const TIKZ_SCRIPT_SELECTOR = `${TIKZ_PENDING_SCRIPT_SELECTOR}, script[type="${TIKZ_ACTIVE_SCRIPT_TYPE}"]`;
     const PDF_RENDER_MARGIN = 1200;
     const PDF_RELEASE_MARGIN = 3600;
-    const BLOCK_VIRTUALIZATION_MARGIN = 2400;
+    const BLOCK_VIRTUALIZATION_BASE_PRELOAD_MARGIN = 5200;
+    const BLOCK_VIRTUALIZATION_DIRECTIONAL_PRELOAD_MARGIN = 5200;
+    const BLOCK_VIRTUALIZATION_RETAIN_MARGIN = 14000;
+    const BLOCK_VIRTUALIZATION_CLEANUP_DELAY_MS = 700;
     const BLOCK_VIRTUALIZATION_DEFAULT_HEIGHT = 180;
 
     function hasRenderedTikz(container) {
@@ -194,16 +197,11 @@
         onShellResize(entries) {
             entries.forEach(entry => {
                 const shell = entry.target;
-                const previousHeight = shell._snaptexLastHeight || entry.contentRect.height;
                 const nextHeight = entry.contentRect.height;
                 shell._snaptexLastHeight = nextHeight;
-
-                const rect = shell.getBoundingClientRect();
-                if (rect.bottom <= 0) {
-                    const delta = nextHeight - previousHeight;
-                    if (Math.abs(delta) > 1) {
-                        window.scrollBy(0, delta);
-                    }
+                const key = this.getBlockKey(shell);
+                if (key && nextHeight > 0) {
+                    this.heightCache.set(key, Math.ceil(nextHeight));
                 }
             });
         }
@@ -257,30 +255,34 @@
             return shell ? shell.querySelector(':scope > .latex-block') : null;
         }
 
-        isShellNearViewport(shell) {
+        getMountMargins(direction) {
+            let above = BLOCK_VIRTUALIZATION_BASE_PRELOAD_MARGIN;
+            let below = BLOCK_VIRTUALIZATION_BASE_PRELOAD_MARGIN;
+            if (direction === 'up') {
+                above += BLOCK_VIRTUALIZATION_DIRECTIONAL_PRELOAD_MARGIN;
+            } else if (direction === 'down') {
+                below += BLOCK_VIRTUALIZATION_DIRECTIONAL_PRELOAD_MARGIN;
+            }
+            return { above, below };
+        }
+
+        isShellInMountRange(shell, direction = 'none') {
             const rect = shell.getBoundingClientRect();
-            return rect.bottom >= -BLOCK_VIRTUALIZATION_MARGIN && rect.top <= window.innerHeight + BLOCK_VIRTUALIZATION_MARGIN;
+            const margins = this.getMountMargins(direction);
+            return rect.bottom >= -margins.above && rect.top <= window.innerHeight + margins.below;
         }
 
-        withScrollCompensation(shell, action) {
-            const before = shell.getBoundingClientRect();
-            const result = action();
-            const after = shell.getBoundingClientRect();
-            shell._snaptexLastHeight = after.height;
-            if (before.bottom <= 0) {
-                const delta = after.height - before.height;
-                if (Math.abs(delta) > 1) {
-                    window.scrollBy(0, delta);
-                }
-            }
-            return result;
+        isShellInRetainRange(shell) {
+            const rect = shell.getBoundingClientRect();
+            return rect.bottom >= -BLOCK_VIRTUALIZATION_RETAIN_MARGIN
+                && rect.top <= window.innerHeight + BLOCK_VIRTUALIZATION_RETAIN_MARGIN;
         }
 
-        mountShell(shell, onMissingHtml, options = {}) {
-            if (options.preserveScroll) {
-                return this.withScrollCompensation(shell, () => this.mountShell(shell, onMissingHtml));
-            }
+        isShellNearViewport(shell, direction = 'none') {
+            return this.isShellInMountRange(shell, direction);
+        }
 
+        mountShell(shell, onMissingHtml) {
             if (!this.enabled || this.getShellBlock(shell)) return null;
 
             const key = this.getBlockKey(shell);
@@ -303,11 +305,7 @@
             return block;
         }
 
-        unmountShell(shell, options = {}) {
-            if (options.preserveScroll) {
-                return this.withScrollCompensation(shell, () => this.unmountShell(shell));
-            }
-
+        unmountShell(shell) {
             const block = this.getShellBlock(shell);
             if (!block) return;
 
@@ -320,19 +318,21 @@
             shell.setAttribute('data-mounted', 'false');
         }
 
-        updateMountedShells(onMount, onMissingHtml) {
+        updateMountedShells(onMount, onMissingHtml, options = {}) {
             if (!this.enabled) return [];
 
             const mounted = [];
+            const direction = options.direction || 'none';
+            const allowUnmount = options.allowUnmount !== false;
             this.getShells().forEach(shell => {
-                if (this.isShellNearViewport(shell)) {
-                    const block = this.mountShell(shell, onMissingHtml, { preserveScroll: true });
+                if (this.isShellInMountRange(shell, direction)) {
+                    const block = this.mountShell(shell, onMissingHtml);
                     if (block) {
                         mounted.push(block);
                         if (onMount) { onMount(block); }
                     }
-                } else {
-                    this.unmountShell(shell, { preserveScroll: true });
+                } else if (allowUnmount && this.getShellBlock(shell) && !this.isShellInRetainRange(shell)) {
+                    this.unmountShell(shell);
                 }
             });
             return mounted;
@@ -984,6 +984,10 @@
             this.lastTargetRatio = 0;
             this.lastScrollTime = 0;
             this.scrollCommandSeq = 0;
+            this.lastVirtualScrollY = window.scrollY;
+            this.scrollDirection = 'none';
+            this.virtualUpdateFrame = null;
+            this.virtualCleanupTimer = null;
             this.config = {
                 autoScrollDelay: 100,
                 debugMemory: false,
@@ -1016,10 +1020,12 @@
         bindEvents() {
             window.addEventListener('message', event => this.onMessage(event));
             window.addEventListener('scroll', () => {
-                this.updateVirtualizedBlocks();
+                this.updateScrollDirection();
+                this.requestVirtualizedUpdate({ allowUnmount: false });
+                this.scheduleVirtualizedCleanup();
                 this.onScroll();
             });
-            window.addEventListener('resize', () => this.updateVirtualizedBlocks());
+            window.addEventListener('resize', () => this.updateVirtualizedBlocks({ allowUnmount: true }));
             document.addEventListener('dblclick', event => this.onDoubleClick(event));
             document.addEventListener('click', event => this.onInternalLinkClick(event));
         }
@@ -1079,7 +1085,7 @@
                     }
                     this.config.experimentalVirtualization = event.data.config.experimentalVirtualization === true;
                     this.virtualization.setEnabled(event.data.config.experimentalVirtualization === true);
-                    this.updateVirtualizedBlocks();
+                    this.updateVirtualizedBlocks({ allowUnmount: true });
                     break;
             }
         }
@@ -1176,11 +1182,43 @@
             this.triggerTikzRendering();
         }
 
-        updateVirtualizedBlocks() {
+        updateScrollDirection() {
+            const currentY = window.scrollY;
+            const delta = currentY - this.lastVirtualScrollY;
+            if (Math.abs(delta) > 2) {
+                this.scrollDirection = delta < 0 ? 'up' : 'down';
+                this.lastVirtualScrollY = currentY;
+            }
+        }
+
+        requestVirtualizedUpdate(options = {}) {
+            if (!this.virtualization.isEnabled() || this.virtualUpdateFrame) return;
+
+            this.virtualUpdateFrame = requestAnimationFrame(() => {
+                this.virtualUpdateFrame = null;
+                this.updateVirtualizedBlocks(options);
+            });
+        }
+
+        scheduleVirtualizedCleanup() {
+            if (this.virtualCleanupTimer) {
+                clearTimeout(this.virtualCleanupTimer);
+            }
+            this.virtualCleanupTimer = setTimeout(() => {
+                this.virtualCleanupTimer = null;
+                this.updateVirtualizedBlocks({ allowUnmount: true });
+            }, BLOCK_VIRTUALIZATION_CLEANUP_DELAY_MS);
+        }
+
+        updateVirtualizedBlocks(options = {}) {
             if (!this.virtualization.isEnabled()) return;
             this.virtualization.updateMountedShells(
                 block => this.onVirtualBlockMounted(block),
-                shell => this.requestVirtualBlockHtml(shell)
+                shell => this.requestVirtualBlockHtml(shell),
+                {
+                    direction: this.scrollDirection,
+                    allowUnmount: options.allowUnmount !== false
+                }
             );
         }
 
@@ -1337,13 +1375,9 @@
                 pending?.callbacks?.forEach(callback => callback(null));
                 return;
             }
-            if (!pending?.forceMount && !this.virtualization.isShellNearViewport(shell)) return;
+            if (!pending?.forceMount && !this.virtualization.isShellNearViewport(shell, this.scrollDirection)) return;
 
-            const block = this.virtualization.mountShell(
-                shell,
-                missingShell => this.requestVirtualBlockHtml(missingShell),
-                { preserveScroll: !pending?.forceMount }
-            );
+            const block = this.virtualization.mountShell(shell, missingShell => this.requestVirtualBlockHtml(missingShell));
             if (block) { this.onVirtualBlockMounted(block); }
             pending?.callbacks?.forEach(callback => callback(block || null));
         }

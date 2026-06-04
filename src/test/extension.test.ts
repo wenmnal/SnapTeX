@@ -919,12 +919,17 @@ suite('Webview resource loading', () => {
         assert.match(webviewSource, /data-html-requested/);
         assert.match(webviewSource, /className = 'latex-block-shell'/);
         assert.match(webviewSource, /data-mounted/);
-        assert.match(webviewSource, /mountShell\(shell, onMissingHtml, options = \{\}\)/);
-        assert.match(webviewSource, /unmountShell\(shell, options = \{\}\)/);
-        assert.match(webviewSource, /updateMountedShells\(onMount, onMissingHtml\)/);
-        assert.match(webviewSource, /withScrollCompensation\(shell, action\)/);
-        assert.match(webviewSource, /window\.scrollBy\(0, delta\)/);
-        assert.match(webviewSource, /preserveScroll: true/);
+        assert.match(webviewSource, /BLOCK_VIRTUALIZATION_BASE_PRELOAD_MARGIN/);
+        assert.match(webviewSource, /BLOCK_VIRTUALIZATION_DIRECTIONAL_PRELOAD_MARGIN/);
+        assert.match(webviewSource, /BLOCK_VIRTUALIZATION_RETAIN_MARGIN/);
+        assert.match(webviewSource, /BLOCK_VIRTUALIZATION_CLEANUP_DELAY_MS/);
+        assert.match(webviewSource, /mountShell\(shell, onMissingHtml\)/);
+        assert.match(webviewSource, /unmountShell\(shell\)/);
+        assert.match(webviewSource, /updateMountedShells\(onMount, onMissingHtml, options = \{\}\)/);
+        assert.match(webviewSource, /isShellInMountRange\(shell, direction = 'none'\)/);
+        assert.match(webviewSource, /isShellInRetainRange\(shell\)/);
+        assert.doesNotMatch(webviewSource, /window\.scrollBy\(0, delta\)/);
+        assert.doesNotMatch(webviewSource, /withScrollCompensation\(shell, action\)/);
         assert.match(webviewSource, /this\.resizeObserver = typeof ResizeObserver !== 'undefined'/);
         assert.match(webviewSource, /onShellResize\(entries\)/);
         assert.match(webviewSource, /this\.virtualization\.unobserveShell\(shell\)/);
@@ -935,7 +940,7 @@ suite('Webview resource loading', () => {
         assert.match(webviewSource, /this\.virtualization\.replaceContentWithShells\(newElements/);
         assert.match(webviewSource, /applyVirtualPatch\(payload\)/);
         assert.match(webviewSource, /getBlockOrShellByIndex\(index\)/);
-        assert.match(webviewSource, /window\.addEventListener\('resize', \(\) => this\.updateVirtualizedBlocks\(\)\)/);
+        assert.match(webviewSource, /window\.addEventListener\('resize', \(\) => this\.updateVirtualizedBlocks\(\{ allowUnmount: true \}\)\)/);
         assert.match(webviewSource, /this\.virtualization\.rememberBlockHeight\(oldBlock\)/);
     });
 
@@ -971,6 +976,11 @@ suite('Webview resource loading', () => {
         assert.match(webviewSource, /const scrollSeq = \+\+this\.scrollCommandSeq/);
         assert.match(webviewSource, /const target = await this\.ensureBlockMountedByIndex\(index\)/);
         assert.match(webviewSource, /await this\.waitForLayout\(\)/);
+        assert.match(webviewSource, /this\.requestVirtualizedUpdate\(\{ allowUnmount: false \}\)/);
+        assert.match(webviewSource, /this\.scheduleVirtualizedCleanup\(\)/);
+        assert.match(webviewSource, /this\.scrollDirection = delta < 0 \? 'up' : 'down'/);
+        assert.match(webviewSource, /direction: this\.scrollDirection/);
+        assert.match(webviewSource, /allowUnmount: options\.allowUnmount !== false/);
         assert.doesNotMatch(webviewSource, /setTimeout\(\(\) => \{[\s\S]*const newTargetY = calcY\(\)/);
     });
 

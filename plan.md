@@ -1,7 +1,7 @@
 # SnapTeX Optimization TODO
 
 > Current branch: `dev`  
-> Last verified: `npm test` passed with 52 tests after Phase 1 shell virtualization and Phase 2 on-demand block HTML loading.
+> Last verified: `npm test` passed with 54 tests after virtualized anchor, tooltip, forward-sync, and directional preloading fixes.
 > Rule for future work: keep each change block small, add or update tests before behavior changes, then run `npm test` and commit only the files for that block.
 
 ## Overall Goal
@@ -38,7 +38,7 @@
 - [x] Preserve internal `\ref`/citation jumps by indexing anchors on virtual block shells and mounting the target on demand.
 - [x] Preserve hover tooltip previews by resolving offscreen anchors through the same shell-mount path.
 - [x] Stabilize forward sync by mounting target block HTML and waiting for layout before scrolling.
-- [x] Stabilize upward virtual scrolling by compensating scroll position when offscreen shell heights change.
+- [x] Stabilize upward virtual scrolling with direction-aware preloading and delayed far-offscreen cleanup.
 - [x] Keep existing full block payload and `update_binary` paths as fallbacks while the experimental path is off.
 
 ### Correctness and Safety Quick Wins
@@ -343,7 +343,7 @@
 - [x] Make `\ref`/citation anchor clicks mount target shells before scrolling.
 - [x] Make hover tooltips mount target shells before cloning preview content.
 - [x] Make forward sync mount target shells before calculating block-relative scroll position.
-- [x] Compensate scroll position for above-viewport shell mount/unmount and async resize changes.
+- [x] Use directional preload and retain windows instead of manual `scrollY` compensation for smoother upward scrolling.
 - [ ] Make preview-to-editor double-click use shell/block index safely.
 - [x] Add height estimation and hash-based height cache.
 - [ ] Reevaluate `content-visibility` with shell virtualization.

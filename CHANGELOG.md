@@ -14,7 +14,8 @@ All notable changes to the "SnapTeX" extension will be documented in this file.
 - **Changed**: Improved full-update behavior with block text hashes, block-list full payloads, per-block path fixing, and DOM preservation for unchanged blocks while keeping the existing fixed full-update threshold.
 - **Added**: Implemented experimental shell-based block virtualization behind `snaptex.experimentalVirtualization`, including shell placeholders, measured/estimated block heights, viewport-near mounting, far-offscreen unmounting, and editor-to-preview sync through shells.
 - **Fixed**: Restored `\ref`/citation anchor jumps and hover tooltips under experimental block virtualization by indexing anchors on block shells and mounting the target block on demand.
-- **Fixed**: Stabilized forward sync and upward scrolling under experimental block virtualization by mounting the target block before scrolling, cancelling stale auto-sync timers, and compensating scroll position when offscreen shell heights change.
+- **Fixed**: Stabilized forward sync under experimental block virtualization by mounting the target block before scrolling and cancelling stale auto-sync timers.
+- **Changed**: Replaced fragile manual `scrollY` compensation in experimental block virtualization with a larger directional preload window and delayed cleanup of far-offscreen mounted blocks, making upward scrolling smoother while preserving most memory savings.
 - **Changed**: Virtualized full updates can now send block metadata first and request block HTML on demand only when a shell needs to mount, reducing initial DOM/HTML/PDF/TikZ memory for long previews while keeping the existing non-virtualized payload paths as fallbacks.
 
 ## [0.5.13] - 2026-05-14
