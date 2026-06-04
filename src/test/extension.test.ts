@@ -1023,12 +1023,14 @@ suite('Webview resource loading', () => {
         assert.match(webviewSource, /mountShell\(shell, onMissingHtml\)/);
         assert.match(webviewSource, /unmountShell\(shell\)/);
         assert.match(webviewSource, /lockShellHeight\(shell, height\)/);
+        assert.match(webviewSource, /unlockShellHeight\(shell\)/);
         assert.match(webviewSource, /refreshMountedShellHeight\(shell, options = \{\}\)/);
         assert.match(webviewSource, /isShellAboveViewport\(shell\)/);
-        assert.match(webviewSource, /this\.lockShellHeight\(shell, reservedHeight\)/);
+        assert.match(webviewSource, /if \(this\.isShellAboveViewport\(shell\)\) \{\s*this\.lockShellHeight\(shell, reservedHeight\);\s*\} else \{\s*this\.unlockShellHeight\(shell\);\s*\}/);
+        assert.match(webviewSource, /if \(this\.isShellAboveViewport\(shell\)\) \{\s*this\.lockShellHeight\(shell, height\);\s*\} else \{\s*this\.unlockShellHeight\(shell\);\s*\}/);
         assert.match(webviewSource, /forceHeightUpdate/);
-        assert.doesNotMatch(webviewSource, /shell\.style\.height = ''/);
-        assert.doesNotMatch(webviewSource, /shell\.style\.minHeight = ''/);
+        assert.match(webviewSource, /shell\.style\.height = ''/);
+        assert.match(webviewSource, /shell\.style\.minHeight = ''/);
         assert.match(styleSource, /\.latex-block-shell\s*\{[\s\S]*overflow: hidden;/);
         assert.match(webviewSource, /updateMountedShells\(onMount, onMissingHtml, options = \{\}\)/);
         assert.match(webviewSource, /isShellInMountRange\(shell, direction = 'none'\)/);

@@ -183,6 +183,13 @@
             shell._snaptexLastHeight = safeHeight;
         }
 
+        unlockShellHeight(shell) {
+            shell.style.height = '';
+            shell.style.minHeight = '';
+            shell.style.overflow = '';
+            shell._snaptexLastHeight = this.getShellHeightBaseline(shell);
+        }
+
         measureMountedBlockHeight(shell) {
             const block = this.getShellBlock(shell);
             if (!block) return this.getShellHeightBaseline(shell);
@@ -201,8 +208,10 @@
             if (key && height > 0) {
                 this.heightCache.set(key, height);
             }
-            if (options.force || !this.isShellAboveViewport(shell)) {
+            if (this.isShellAboveViewport(shell)) {
                 this.lockShellHeight(shell, height);
+            } else {
+                this.unlockShellHeight(shell);
             }
         }
 
@@ -329,7 +338,11 @@
             const reservedHeight = this.getShellHeightBaseline(shell);
             shell.textContent = '';
             shell.appendChild(block);
-            this.lockShellHeight(shell, reservedHeight);
+            if (this.isShellAboveViewport(shell)) {
+                this.lockShellHeight(shell, reservedHeight);
+            } else {
+                this.unlockShellHeight(shell);
+            }
             shell.setAttribute('data-mounted', 'true');
             shell.setAttribute('data-html-loaded', 'true');
             this.setShellAnchors(shell, this.getAnchorIdsFromBlock(block));

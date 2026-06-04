@@ -1,7 +1,7 @@
 # SnapTeX Optimization TODO
 
 > Current branch: `dev`  
-> Last verified: `npm test` passed with 57 tests after comment-only and standalone list-boundary block cleanup.
+> Last verified: `npm test` passed with 57 tests after visible virtual shell height release.
 > Rule for future work: keep each change block small, add or update tests before behavior changes, then run `npm test` and commit only the files for that block.
 
 ## Overall Goal
@@ -39,7 +39,8 @@
 - [x] Preserve hover tooltip previews by resolving offscreen anchors through the same shell-mount path.
 - [x] Stabilize forward sync by mounting target block HTML and waiting for layout before scrolling.
 - [x] Stabilize upward virtual scrolling with direction-aware preloading and delayed far-offscreen cleanup.
-- [x] Keep mounted virtual shells height-locked so above-viewport hydration does not change document height.
+- [x] Keep above-viewport virtual shells height-locked so hydration does not change document height during upward scrolling.
+- [x] Release fixed shell heights for visible mounted blocks so shell estimates do not affect spacing between rendered blocks.
 - [x] Keep existing full block payload and `update_binary` paths as fallbacks while the experimental path is off.
 
 ### Correctness and Safety Quick Wins
