@@ -214,7 +214,8 @@ export class SmartRenderer {
         const safeDate = (this.currentDate || '').replace(/[\r\n]/g, ' ');
         const metaFingerprint = ` [meta:${stableHash(`${safeTitle}\u0000${safeAuthor}\u0000${safeDate}`)}]`;
 
-        const newBlockTexts = doc.blockTexts.map(rawText => {
+        const newBlockTexts = Array.from({ length: doc.getBlockCount() }, (_unused, index) => {
+            const rawText = doc.getBlockText(index) ?? '';
             const trimmed = rawText.trim();
             return trimmed.includes('\\maketitle') ? trimmed.replace('\\maketitle', `\\maketitle${metaFingerprint}`) : trimmed;
         });

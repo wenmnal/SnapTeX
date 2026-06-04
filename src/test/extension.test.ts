@@ -386,6 +386,15 @@ suite('LatexDocument source mapping', () => {
         assert.equal(result.blockTexts.length, 1);
     });
 
+    test('exposes block text through an accessor for future span-backed storage', () => {
+        const doc = createDocument(['First block', 'Second block']);
+
+        assert.equal(doc.getBlockCount(), 2);
+        assert.equal(doc.getBlockText(0), 'First block');
+        assert.equal(doc.getBlockText(1), 'Second block');
+        assert.equal(doc.getBlockText(2), undefined);
+    });
+
     test('drops comment-only blocks without leaving preview gaps', async () => {
         const mainUri = vscode.Uri.file('/project/main.tex');
         const provider = new MemoryFileProvider(new Map([
@@ -617,10 +626,12 @@ suite('SmartRenderer', () => {
         const repoRoot = path.resolve(__dirname, '..', '..');
         const rulesSource = fs.readFileSync(path.join(repoRoot, 'src', 'rules.ts'), 'utf8');
         const typesSource = fs.readFileSync(path.join(repoRoot, 'src', 'types.ts'), 'utf8');
+        const rendererSource = fs.readFileSync(path.join(repoRoot, 'src', 'renderer.ts'), 'utf8');
 
         assert.doesNotMatch(rulesSource, /from '\.\/renderer'/);
         assert.match(typesSource, /export interface RenderContext/);
         assert.match(typesSource, /apply: \(text: string, renderer: RenderContext\) => string/);
+        assert.match(rendererSource, /doc\.getBlockText\(index\)/);
     });
 
     test('returns patch payloads for small localized edits', () => {

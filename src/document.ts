@@ -59,6 +59,14 @@ export class LatexDocument {
         this.blockTexts = [];
     }
 
+    public getBlockCount(): number {
+        return this.blockTexts.length;
+    }
+
+    public getBlockText(index: number): string | undefined {
+        return this.blockTexts[index];
+    }
+
     public applyResult(result: DocumentParseResult) {
         this.blockTexts = result.blockTexts;
         this.blockLines = result.blockLines;
