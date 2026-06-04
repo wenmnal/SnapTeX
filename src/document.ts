@@ -26,6 +26,11 @@ interface BibCacheEntry {
     entries: Map<string, BibEntry>;
 }
 
+interface IndexedLine {
+    text: string;
+    line: number;
+}
+
 export class LatexDocument {
     public blockTexts: string[] = [];
     public blockLines: number[] = [];
@@ -177,7 +182,8 @@ export class LatexDocument {
             }
         }
 
-        const rawLines = content.split(/\r?\n/);
+        const sourceLines = content.split(/\r?\n/).map((text, line) => ({ text, line }));
+        const rawLines = depth > 0 ? this.stripStandaloneWrapper(sourceLines) : sourceLines;
         const flattenedLines: string[] = [];
         // Collect primitive numbers instead of Objects
         const outIndices: number[] = [];
@@ -185,13 +191,14 @@ export class LatexDocument {
         const inputRegex = /^(\s*)(?:\\input|\\include)\{([^}]+)\}/;
 
         for (let i = 0; i < rawLines.length; i++) {
-            const line = rawLines[i].replace(/\r/g, '');
+            const sourceLine = rawLines[i];
+            const line = sourceLine.text.replace(/\r/g, '');
             const trimmed = line.trim();
 
             if (trimmed.startsWith('%')) {
                 flattenedLines.push(line);
                 outIndices.push(currentFileIndex);
-                outLines.push(i);
+                outLines.push(sourceLine.line);
                 continue;
             }
 
@@ -213,11 +220,70 @@ export class LatexDocument {
             } else {
                 flattenedLines.push(line);
                 outIndices.push(currentFileIndex);
-                outLines.push(i);
+                outLines.push(sourceLine.line);
             }
         }
 
         return { textLines: flattenedLines, fileIndices: outIndices, lines: outLines };
+    }
+
+    private stripStandaloneWrapper(lines: IndexedLine[]): IndexedLine[] {
+        const beginIndex = lines.findIndex(line => /\\begin\{document\}/i.test(line.text));
+        if (beginIndex === -1) { return lines; }
+
+        const endOffset = lines.slice(beginIndex + 1).findIndex(line => /\\end\{document\}/i.test(line.text));
+        if (endOffset === -1) { return lines; }
+
+        const endIndex = beginIndex + 1 + endOffset;
+        return [
+            ...this.extractPortablePreambleLines(lines.slice(0, beginIndex)),
+            ...lines.slice(beginIndex + 1, endIndex)
+        ];
+    }
+
+    private extractPortablePreambleLines(lines: IndexedLine[]): IndexedLine[] {
+        const portableLines: IndexedLine[] = [];
+        let capturingDefinition = false;
+        let braceDepth = 0;
+        const portableCommandRegex = /^\\(?:(?:provide|re)?newcommand\*?|g?def|DeclareMathOperator\*?|usetikzlibrary|tikzset|definecolor)(?=\s|\\|\{|\[|$)/;
+
+        for (const line of lines) {
+            const trimmed = line.text.trim();
+            if (!capturingDefinition && !portableCommandRegex.test(trimmed)) {
+                continue;
+            }
+
+            portableLines.push(line);
+            capturingDefinition = true;
+            braceDepth += this.getBraceDelta(line.text);
+
+            if (braceDepth <= 0 && /}/.test(line.text)) {
+                capturingDefinition = false;
+                braceDepth = 0;
+            }
+        }
+
+        return portableLines;
+    }
+
+    private getBraceDelta(line: string): number {
+        let delta = 0;
+        for (let i = 0; i < line.length; i++) {
+            const char = line[i];
+            if (char === '\\') {
+                i++;
+                continue;
+            }
+            if (char === '%') {
+                break;
+            }
+            if (char === '{') {
+                delta++;
+            } else if (char === '}') {
+                delta--;
+            }
+        }
+        return delta;
     }
 
     private async loadBibliography(text: string, rootDir: vscode.Uri): Promise<Map<string, BibEntry>> {

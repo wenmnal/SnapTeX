@@ -324,6 +324,55 @@ suite('LatexDocument source mapping', () => {
         assert.equal(result.contentStartLineOffset, 0);
         assert.equal(result.blockTexts.length, 1);
     });
+
+    test('inlines standalone TikZ inputs without treating their document end as the root end', async () => {
+        const mainUri = vscode.Uri.file('/project/main.tex');
+        const figureUri = vscode.Uri.file('/project/figures/fold_illus_reliever.tex');
+        const provider = new MemoryFileProvider(new Map([
+            [normalizeUri(mainUri), [
+                '\\documentclass{article}',
+                '\\begin{document}',
+                'Before figure.',
+                '\\begin{figure}[t]',
+                '\\centering',
+                '\\resizebox{\\linewidth}{!}{%',
+                '\\input{figures/fold_illus_reliever.tex}',
+                '}',
+                '\\label{fig:illus_reliever}',
+                '\\end{figure}',
+                'After figure should remain.',
+                '\\end{document}'
+            ].join('\n')],
+            [normalizeUri(figureUri), [
+                '\\documentclass[tikz,border=12pt]{standalone}',
+                '\\usepackage{tikz}',
+                '\\usetikzlibrary{patterns, arrows.meta}',
+                '\\newcommand{\\legendBox}[1]{%',
+                '  \\mbox{\\tikz \\node[#1] {};}%',
+                '}',
+                '\\begin{document}',
+                '\\begin{tikzpicture}[>=Latex]',
+                '\\node {\\legendBox{draw=red} body};',
+                '\\end{tikzpicture}',
+                '\\end{document}'
+            ].join('\n')]
+        ]));
+        const doc = new LatexDocument(provider);
+
+        const result = await doc.parse(mainUri);
+        doc.applyResult(result);
+        const joinedBlocks = result.blockTexts.join('\n');
+        const html = new SmartRenderer(provider).render(doc).htmls?.join('') ?? '';
+
+        assert.match(joinedBlocks, /After figure should remain/);
+        assert.doesNotMatch(joinedBlocks, /\\documentclass\[tikz/);
+        assert.doesNotMatch(joinedBlocks, /\\end\{document\}/);
+        assert.match(result.metadata.tikzGlobal, /\\usetikzlibrary\{patterns, arrows\.meta\}/);
+        assert.match(result.metadata.tikzMacroMap.get('\\legendBox') ?? '', /\\def\\legendBox#1/);
+        assert.match(html, /type="text\/snaptex-tikz"/);
+        assert.match(html, /After figure should remain/);
+        assert.doesNotMatch(html, /\\newcommand\{\\legendBox\}/);
+    });
 });
 
 suite('SmartRenderer', () => {
@@ -879,8 +928,11 @@ suite('Metadata extraction', () => {
         assert.match(result.data.tikzGlobal, /\\usetikzlibrary\{arrows\.meta\}/);
         assert.match(result.data.tikzGlobal, /\\tikzset\{box\/.style=\{draw\}\}/);
         assert.equal(result.data.tikzMacroMap.get('\\origin'), '\\def\\origin{(0,0)}');
+        assert.equal(result.data.tikzMacroMap.get('\\vect'), '\\def\\vect#1{\\mathbf{#1}}');
         assert.doesNotMatch(result.cleanedText, /\\title/);
         assert.doesNotMatch(result.cleanedText, /\\author/);
+        assert.doesNotMatch(result.cleanedText, /\\newcommand\{\\vect\}/);
+        assert.doesNotMatch(result.cleanedText, /\\usetikzlibrary/);
     });
 });
 
