@@ -1,4 +1,5 @@
 import { REGEX_STR } from './patterns';
+import { stableHash } from './utils';
 
 export interface BlockNumbering {
     seq: number;
@@ -17,129 +18,242 @@ export interface ScanResult {
     labelMap: Record<string, string>;
 }
 
+export interface BlockTextProvider {
+    getBlockCount(): number;
+    getBlockText(index: number): string | undefined;
+    getBlockHash(index: number): string | undefined;
+}
+
+type SectionLevel = 'section' | 'subsection' | 'subsubsection' | 'paragraph' | 'subparagraph';
+type FloatKind = 'fig' | 'tbl' | 'alg';
+
+type ScanToken =
+    | { pos: number; kind: 'sec'; level: SectionLevel; label?: string }
+    | { pos: number; kind: 'eq'; label?: string; tag?: string }
+    | { pos: number; kind: 'float'; floatKind: FloatKind; label?: string }
+    | { pos: number; kind: 'thm'; envName: string; label?: string };
+
+interface BlockScanSummary {
+    hash: string;
+    tokens: ScanToken[];
+}
+
+interface CounterState {
+    sec: number;
+    subsec: number;
+    subsubsec: number;
+    eq: number;
+    fig: number;
+    tbl: number;
+    alg: number;
+}
+
+/**
+ * Lightweight SnapTeX numbering scanner.
+ *
+ * This intentionally models only SnapTeX's preview numbering rules. It does not
+ * try to emulate full LaTeX counter expansion, user-defined counter resets, or
+ * custom theorem numbering. The scanner caches block-local summaries by hash;
+ * unchanged blocks reuse their summaries while final numbers are recomputed from
+ * the summaries in document order.
+ */
 export class LatexCounterScanner {
-    private counters = {
-        sec: 0, subsec: 0, subsubsec: 0,
-        eq: 0, fig: 0, tbl: 0, alg: 0
-    };
+    private summaries: BlockScanSummary[] = [];
 
-    // Use Record to allow dynamic keys for theorem-like environments (theorem, lemma, definition, etc.)
-    private dynamicCounters: Record<string, number> = {};
-    private labelMap: Record<string, string> = {};
-
-    private getNextNumber(envName: string): string {
-        const name = envName.toLowerCase();
-        if (!this.dynamicCounters[name]) {
-            this.dynamicCounters[name] = 0;
-        }
-        this.dynamicCounters[name]++;
-        return String(this.dynamicCounters[name]);
+    public scan(provider: BlockTextProvider): ScanResult {
+        const summaries = this.updateSummaries(provider);
+        return this.buildResult(summaries);
     }
 
-    public scan(blocks: string[]): ScanResult {
-        this.reset();
-        const results: BlockNumbering[] = [];
+    private updateSummaries(provider: BlockTextProvider): BlockScanSummary[] {
+        const count = provider.getBlockCount();
+        const hashes: string[] = [];
+        const textCache = new Map<number, string>();
+
+        const getText = (index: number) => {
+            if (!textCache.has(index)) {
+                textCache.set(index, provider.getBlockText(index) ?? '');
+            }
+            return textCache.get(index) ?? '';
+        };
+
+        for (let index = 0; index < count; index++) {
+            let hash = provider.getBlockHash(index);
+            if (!hash) {
+                hash = stableHash(getText(index));
+            }
+            hashes.push(hash);
+        }
+
+        const previous = this.summaries;
+        const next: BlockScanSummary[] = new Array(count);
+
+        let start = 0;
+        const minLen = Math.min(previous.length, count);
+        while (start < minLen && previous[start].hash === hashes[start]) {
+            next[start] = previous[start];
+            start++;
+        }
+
+        let end = 0;
+        const maxEnd = Math.min(previous.length - start, count - start);
+        while (end < maxEnd) {
+            const oldIndex = previous.length - 1 - end;
+            const newIndex = count - 1 - end;
+            if (previous[oldIndex].hash !== hashes[newIndex]) {
+                break;
+            }
+            next[newIndex] = previous[oldIndex];
+            end++;
+        }
+
+        for (let index = start; index < count - end; index++) {
+            next[index] = this.parseBlock(getText(index), hashes[index]);
+        }
+
+        this.summaries = next;
+        return next;
+    }
+
+    private parseBlock(text: string, hash: string): BlockScanSummary {
+        const tokens: ScanToken[] = [];
 
         const secRegex = new RegExp(`\\\\(${REGEX_STR.SECTION_LEVELS})(\\*?)\\s*\\{`, 'g');
         const eqRegex = new RegExp(`\\\\begin\\{(${REGEX_STR.MATH_ENVS})\\}(\\*?)`, 'g');
         const floatRegex = new RegExp(`\\\\begin\\{(${REGEX_STR.FLOAT_ENVS})(\\*)?\\}`, 'g');
         const thmRegex = new RegExp(`\\\\begin\\{(${REGEX_STR.THEOREM_ENVS})\\}`, 'g');
 
-        blocks.forEach((text, index) => {
+        let match;
+
+        while ((match = secRegex.exec(text)) !== null) {
+            if (match[2] === '*') { continue; }
+            tokens.push({
+                pos: match.index,
+                kind: 'sec',
+                level: match[1] as SectionLevel,
+                label: this.extractLabelNear(text, match.index)
+            });
+        }
+
+        while ((match = eqRegex.exec(text)) !== null) {
+            if (match[2] === '*') { continue; }
+            const env = this.extractEnvInfo(text, match.index, match[1]);
+            tokens.push({
+                pos: match.index,
+                kind: 'eq',
+                label: env.label,
+                tag: env.tag
+            });
+        }
+
+        while ((match = floatRegex.exec(text)) !== null) {
+            const floatKind = this.toFloatKind(match[1]);
+            if (!floatKind) { continue; }
+            tokens.push({
+                pos: match.index,
+                kind: 'float',
+                floatKind,
+                label: this.extractEnvInfo(text, match.index, match[1]).label
+            });
+        }
+
+        while ((match = thmRegex.exec(text)) !== null) {
+            const envName = match[1].toLowerCase();
+            tokens.push({
+                pos: match.index,
+                kind: 'thm',
+                envName,
+                label: this.extractEnvInfo(text, match.index, match[1]).label
+            });
+        }
+
+        tokens.sort((a, b) => a.pos - b.pos);
+        return { hash, tokens };
+    }
+
+    private buildResult(summaries: BlockScanSummary[]): ScanResult {
+        const counters: CounterState = { sec: 0, subsec: 0, subsubsec: 0, eq: 0, fig: 0, tbl: 0, alg: 0 };
+        const dynamicCounters: Record<string, number> = {};
+        const labelMap: Record<string, string> = {};
+        const results: BlockNumbering[] = [];
+
+        summaries.forEach((summary, index) => {
             const blockRes: BlockNumbering = {
                 seq: index,
                 counts: { eq: [], fig: [], tbl: [], alg: [], sec: [], thm: [] }
             };
 
-            // 1. Sections
-            secRegex.lastIndex = 0;
-            let match;
-            while ((match = secRegex.exec(text)) !== null) {
-                if (match[2] === '*') {continue;}
-                const type = match[1];
-                if (type === 'section') {
-                    this.counters.sec++; this.counters.subsec = 0; this.counters.subsubsec = 0;
-                } else if (type === 'subsection') {
-                    this.counters.subsec++; this.counters.subsubsec = 0;
+            for (const token of summary.tokens) {
+                if (token.kind === 'sec') {
+                    const numStr = this.advanceSection(counters, token.level);
+                    blockRes.counts.sec.push(numStr);
+                    if (token.label) { labelMap[token.label] = numStr; }
+                } else if (token.kind === 'eq') {
+                    counters.eq++;
+                    const numStr = token.tag ?? String(counters.eq);
+                    blockRes.counts.eq.push(numStr);
+                    if (token.label) { labelMap[token.label] = numStr; }
+                } else if (token.kind === 'float') {
+                    counters[token.floatKind]++;
+                    const numStr = String(counters[token.floatKind]);
+                    blockRes.counts[token.floatKind].push(numStr);
+                    if (token.label) { labelMap[token.label] = numStr; }
                 } else {
-                    this.counters.subsubsec++;
+                    dynamicCounters[token.envName] = (dynamicCounters[token.envName] ?? 0) + 1;
+                    const numStr = String(dynamicCounters[token.envName]);
+                    blockRes.counts.thm.push(numStr);
+                    if (token.label) { labelMap[token.label] = numStr; }
                 }
-                const numStr = this.formatSec();
-                blockRes.counts.sec.push(numStr);
-                this.tryExtractLabel(text, match.index, numStr);
-            }
-
-            // 2. Equations
-            eqRegex.lastIndex = 0;
-            while ((match = eqRegex.exec(text)) !== null) {
-                if (match[2] === '*') {continue;}
-                this.counters.eq++;
-                const numStr = String(this.counters.eq);
-                blockRes.counts.eq.push(numStr);
-                this.extractLabelInEnv(text, match.index, numStr, match[1]);
-            }
-
-            // 3. Floats (Figure, Table, Algorithm)
-            floatRegex.lastIndex = 0;
-            while ((match = floatRegex.exec(text)) !== null) {
-                const type = match[1];
-                let numStr = "";
-                if (type === 'figure') { this.counters.fig++; numStr = String(this.counters.fig); blockRes.counts.fig.push(numStr); }
-                else if (type === 'table') { this.counters.tbl++; numStr = String(this.counters.tbl); blockRes.counts.tbl.push(numStr); }
-                else if (type === 'algorithm') { this.counters.alg++; numStr = String(this.counters.alg); blockRes.counts.alg.push(numStr); }
-
-                this.extractLabelInEnv(text, match.index, numStr, type);
-            }
-
-            // 4. Theorems
-            thmRegex.lastIndex = 0;
-            while ((match = thmRegex.exec(text)) !== null) {
-                const envName = match[1].toLowerCase();
-                const numStr = this.getNextNumber(envName); // 每个环境名独立计数
-
-                blockRes.counts.thm.push(numStr);
-                this.extractLabelInEnv(text, match.index, numStr, match[1]);
             }
 
             results.push(blockRes);
         });
 
-        return {
-            blockNumbering: results,
-            labelMap: this.labelMap
-        };
+        return { blockNumbering: results, labelMap };
     }
 
-    private reset() {
-        this.counters = { sec: 0, subsec: 0, subsubsec: 0, eq: 0, fig: 0, tbl: 0, alg: 0 };
-        this.dynamicCounters = {};
-        this.labelMap = {};
+    private advanceSection(counters: CounterState, level: SectionLevel): string {
+        if (level === 'section') {
+            counters.sec++;
+            counters.subsec = 0;
+            counters.subsubsec = 0;
+        } else if (level === 'subsection') {
+            counters.subsec++;
+            counters.subsubsec = 0;
+        } else {
+            counters.subsubsec++;
+        }
+        return this.formatSec(counters);
     }
 
-    private formatSec() {
-        let s = `${this.counters.sec}`;
-        if (this.counters.subsec > 0) {s += `.${this.counters.subsec}`;}
-        if (this.counters.subsubsec > 0) {s += `.${this.counters.subsubsec}`;}
+    private formatSec(counters: CounterState): string {
+        let s = `${counters.sec}`;
+        if (counters.subsec > 0) { s += `.${counters.subsec}`; }
+        if (counters.subsubsec > 0) { s += `.${counters.subsubsec}`; }
         return s;
     }
 
-    private tryExtractLabel(text: string, startIdx: number, val: string) {
+    private extractLabelNear(text: string, startIdx: number): string | undefined {
         const sub = text.substring(startIdx, startIdx + 200);
-        const m = sub.match(/\\label\s*\{([^}]+)\}/);
-        if (m) {this.labelMap[m[1]] = val;}
+        const match = sub.match(/\\label\s*\{([^}]+)\}/);
+        return match?.[1];
     }
 
-    private extractLabelInEnv(text: string, startIdx: number, val: string, envName: string) {
+    private extractEnvInfo(text: string, startIdx: number, envName: string): { label?: string; tag?: string } {
         const sub = text.substring(startIdx);
         const endRegex = new RegExp(`\\\\end\\{${envName}\\*?\\}`);
         const endMatch = sub.match(endRegex);
-
         const limit = endMatch ? (endMatch.index! + endMatch[0].length) : sub.length;
         const block = sub.substring(0, limit);
+        const label = block.match(/\\label\s*\{([^}]+)\}/)?.[1];
+        const tag = block.match(/\\tag\*?\s*\{([^}]+)\}/)?.[1];
+        return { label, tag };
+    }
 
-        const m = block.match(/\\label\s*\{([^}]+)\}/);
-        if (m) {
-            this.labelMap[m[1]] = val;
-        }
+    private toFloatKind(type: string): FloatKind | undefined {
+        if (type === 'figure') { return 'fig'; }
+        if (type === 'table') { return 'tbl'; }
+        if (type === 'algorithm') { return 'alg'; }
+        return undefined;
     }
 }

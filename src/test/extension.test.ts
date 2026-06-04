@@ -12,7 +12,7 @@ import { extractMetadata } from '../metadata';
 import { isUriWithinAllowedRoots, normalizePdfRequestPath } from '../panel';
 import { ProtectionManager } from '../protection';
 import { postProcessHtml } from '../rules';
-import { LatexCounterScanner } from '../scanner';
+import { BlockTextProvider, LatexCounterScanner } from '../scanner';
 import { BlockSpan, LatexBlockSplitter } from '../splitter';
 import { SmartRenderer } from '../renderer';
 import { cleanLatexCommands, extractAndHideLabels, findCommand, normalizeUri, resolveLatexStyles, stableHash } from '../utils';
@@ -124,6 +124,21 @@ function spanText(text: string, span: BlockSpan): string {
 
 function resultBlockTexts(result: DocumentParseResult): string[] {
     return result.blockSpans.map(span => spanText(result.bodyText, span));
+}
+
+function createBlockTextProvider(blocks: string[], reads?: number[]): BlockTextProvider {
+    return {
+        getBlockCount: () => blocks.length,
+        getBlockText: (index: number) => {
+            reads?.push(index);
+            return blocks[index];
+        },
+        getBlockHash: (index: number) => blocks[index] === undefined ? undefined : stableHash(blocks[index])
+    };
+}
+
+function scanBlocks(blocks: string[], scanner = new LatexCounterScanner()) {
+    return scanner.scan(createBlockTextProvider(blocks));
 }
 
 function readWebviewRuntimeSource(repoRoot: string): string {
@@ -275,7 +290,7 @@ suite('LatexCounterScanner', () => {
             '\\begin{algorithm*}\\caption{Alg}\\label{alg:a}\\end{algorithm*}'
         ];
 
-        const result = new LatexCounterScanner().scan(blocks);
+        const result = scanBlocks(blocks);
 
         assert.deepStrictEqual(result.blockNumbering[0].counts.fig, ['1']);
         assert.deepStrictEqual(result.blockNumbering[1].counts.fig, ['2']);
@@ -295,7 +310,7 @@ suite('LatexCounterScanner', () => {
             '\\begin{equation*}y=1\\label{eq:y}\\end{equation*}'
         ];
 
-        const result = new LatexCounterScanner().scan(blocks);
+        const result = scanBlocks(blocks);
 
         assert.deepStrictEqual(result.blockNumbering[0].counts.sec, ['1']);
         assert.deepStrictEqual(result.blockNumbering[1].counts.sec, ['1.1']);
@@ -304,6 +319,45 @@ suite('LatexCounterScanner', () => {
         assert.equal(result.labelMap['sec:intro'], '1');
         assert.equal(result.labelMap['eq:x'], '1');
         assert.equal(result.labelMap['eq:y'], undefined);
+    });
+
+    test('uses explicit equation tags as lightweight display numbers', () => {
+        const result = scanBlocks([
+            '\\begin{equation}x=1\\tag{A}\\label{eq:tagged}\\end{equation}',
+            '\\begin{equation}y=1\\label{eq:next}\\end{equation}'
+        ]);
+
+        assert.deepStrictEqual(result.blockNumbering[0].counts.eq, ['A']);
+        assert.deepStrictEqual(result.blockNumbering[1].counts.eq, ['2']);
+        assert.equal(result.labelMap['eq:tagged'], 'A');
+        assert.equal(result.labelMap['eq:next'], '2');
+    });
+
+    test('reuses unchanged block summaries while updating numbering offsets', () => {
+        const scanner = new LatexCounterScanner();
+        const firstReads: number[] = [];
+        scanner.scan(createBlockTextProvider([
+            '\\begin{equation}\\label{eq:a}a=1\\end{equation}',
+            '\\begin{equation}\\label{eq:b}b=1\\end{equation}',
+            '\\begin{equation}\\label{eq:c}c=1\\end{equation}'
+        ], firstReads));
+
+        const secondReads: number[] = [];
+        const result = scanner.scan(createBlockTextProvider([
+            '\\begin{equation}\\label{eq:a}a=1\\end{equation}',
+            [
+                '\\begin{equation}\\label{eq:b}b=1\\end{equation}',
+                '\\begin{equation}\\label{eq:new}n=1\\end{equation}'
+            ].join('\n'),
+            '\\begin{equation}\\label{eq:c}c=1\\end{equation}'
+        ], secondReads));
+
+        assert.deepStrictEqual(firstReads, [0, 1, 2]);
+        assert.deepStrictEqual(secondReads, [1]);
+        assert.equal(result.labelMap['eq:a'], '1');
+        assert.equal(result.labelMap['eq:b'], '2');
+        assert.equal(result.labelMap['eq:new'], '3');
+        assert.equal(result.labelMap['eq:c'], '4');
     });
 });
 
