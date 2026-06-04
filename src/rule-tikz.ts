@@ -182,7 +182,7 @@ export function createTikzPictureRule(): PreprocessRule {
                     </script>
                 </div>`;
 
-                return renderer.protect('tikz', html) + (hiddenHtml ? renderer.protect('raw', hiddenHtml) : '');
+                return renderer.protectHtml('tikz', html) + (hiddenHtml ? renderer.protectHtml('raw', hiddenHtml) : '');
             });
         }
     };

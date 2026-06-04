@@ -5,17 +5,27 @@ const path = require("path");
 const production = process.argv.includes('--production');
 const watch = process.argv.includes('--watch');
 
-function replaceOrThrow(source, original, replacement, label) {
-    if (source.includes(replacement)) {
+function replaceOrThrow(source, patch) {
+    if (source.includes(patch.replacement)) {
         return { source, patched: false };
     }
-    if (!source.includes(original)) {
-        throw new Error(`[build] TikZJax ${label} patch target not found.`);
+    if (!source.includes(patch.original)) {
+        throw new Error(`[build] TikZJax ${patch.label} patch target not found.`);
     }
     return {
-        source: source.replace(original, replacement),
+        source: source.replace(patch.original, patch.replacement),
         patched: true
     };
+}
+
+function applyTextPatches(source, patches) {
+    let patched = false;
+    for (const patch of patches) {
+        const result = replaceOrThrow(source, patch);
+        source = result.source;
+        patched = patched || result.patched;
+    }
+    return { source, patched };
 }
 
 function createTikzJaxBootstrapPatch(runtimeAssetFiles) {
@@ -35,6 +45,64 @@ function createTikzJaxBootstrapPatch(runtimeAssetFiles) {
     ].join('');
 }
 
+function createTikzJaxSourcePatches(runtimeAssetFiles) {
+    return [
+        {
+            label: 'worker bootstrap',
+            original: 'const e=N.href.replace(/\\/tikzjax\\.js(?:\\?.*)?$/,""),r=await t(new o(`${e}/run-tex.js`));',
+            replacement: createTikzJaxBootstrapPatch(runtimeAssetFiles)
+        },
+        {
+            label: 'worker load args',
+            original: 'try{await r.load(e)}catch(e){console.log(e)}return r',
+            replacement: 'try{await r.load({base:e,assets:snaptexAssets})}catch(e){try{await n.terminate(r)}finally{r.__snaptexRunTexBlobUrls.forEach((e=>e&&URL.revokeObjectURL(e)))}throw e}return r'
+        },
+        {
+            label: 'worker terminate cleanup',
+            original: 'Z=async()=>{H&&H.disconnect(),await n.terminate(await V)};',
+            replacement: 'Z=async()=>{H&&H.disconnect();const e=await V;await n.terminate(e),e.__snaptexRunTexBlobUrls&&e.__snaptexRunTexBlobUrls.forEach((e=>e&&URL.revokeObjectURL(e)))};'
+        },
+        {
+            label: 'stale script queue guard',
+            original: 's=async e=>{const t=e.childNodes[0].nodeValue',
+            replacement: 's=async e=>{if(!e.isConnected&&(!e.loader||!e.loader.isConnected))return;const t=e.childNodes[0].nodeValue'
+        },
+        {
+            label: 'compile failure event',
+            original: 'catch(e){return console.log(e),void(r.outerHTML=\'<img src="//invalid.site/img-not-found.png">\')}',
+            replacement: 'catch(e){console.log(e);const t=new CustomEvent("tikzjax-load-failed",{bubbles:!0,detail:{message:e&&e.message?e.message:"TikZ rendering failed."}});return void r.dispatchEvent(t)}'
+        },
+        {
+            label: 'disconnected loader guard',
+            original: 'if(r.replaceWith(a),!e.dataset.disableCache)try{',
+            replacement: 'if(!r.isConnected)return;if(r.replaceWith(a),!e.dataset.disableCache)try{'
+        }
+    ];
+}
+
+function createRunTexSourcePatches() {
+    return [
+        {
+            label: 'run-tex asset fetch',
+            original: 'let Wn,Zn,zn;const Xn=async A=>{const t=await fetch(`${zn}/${A}`);',
+            replacement: 'let Wn,Zn,zn,snaptexAssetUrls=null;const Xn=async A=>{const t=await fetch(snaptexAssetUrls&&snaptexAssetUrls[A]||`${zn}/${A}`);'
+        },
+        {
+            label: 'run-tex load args',
+            original: 'YA({async load(A){zn=A,Zn=await Xn("tex.wasm.gz"),Wn=new Uint8Array(await Xn("core.dump.gz"),0,65536*wn)},async texify',
+            replacement: 'YA({async load(A){snaptexAssetUrls=A&&A.assets||null,zn=A&&A.base||A,Zn=await Xn("tex.wasm.gz"),Wn=new Uint8Array(await Xn("core.dump.gz"),0,65536*wn)},async texify'
+        }
+    ];
+}
+
+function patchTextFile(filePath, patches) {
+    const result = applyTextPatches(fs.readFileSync(filePath, 'utf8'), patches);
+    if (result.patched) {
+        fs.writeFileSync(filePath, result.source);
+    }
+    return result.patched;
+}
+
 function patchTikzJaxWorkerBootstrap(tikzDest) {
     const tikzJaxFile = path.join(tikzDest, 'tikzjax.js');
     const runTexFile = path.join(tikzDest, 'run-tex.js');
@@ -51,60 +119,13 @@ function patchTikzJaxWorkerBootstrap(tikzDest) {
                 : []
         )
     ];
-    const originalBootstrap = 'const e=N.href.replace(/\\/tikzjax\\.js(?:\\?.*)?$/,""),r=await t(new o(`${e}/run-tex.js`));';
-    const patchedBootstrap = createTikzJaxBootstrapPatch(runtimeAssetFiles);
-    const originalLoad = 'try{await r.load(e)}catch(e){console.log(e)}return r';
-    const patchedLoad = 'try{await r.load({base:e,assets:snaptexAssets})}catch(e){try{await n.terminate(r)}finally{r.__snaptexRunTexBlobUrls.forEach((e=>e&&URL.revokeObjectURL(e)))}throw e}return r';
-    const originalTerminate = 'Z=async()=>{H&&H.disconnect(),await n.terminate(await V)};';
-    const patchedTerminate = 'Z=async()=>{H&&H.disconnect();const e=await V;await n.terminate(e),e.__snaptexRunTexBlobUrls&&e.__snaptexRunTexBlobUrls.forEach((e=>e&&URL.revokeObjectURL(e)))};';
-    const originalRunTexFetch = 'let Wn,Zn,zn;const Xn=async A=>{const t=await fetch(`${zn}/${A}`);';
-    const patchedRunTexFetch = 'let Wn,Zn,zn,snaptexAssetUrls=null;const Xn=async A=>{const t=await fetch(snaptexAssetUrls&&snaptexAssetUrls[A]||`${zn}/${A}`);';
-    const originalRunTexLoad = 'YA({async load(A){zn=A,Zn=await Xn("tex.wasm.gz"),Wn=new Uint8Array(await Xn("core.dump.gz"),0,65536*wn)},async texify';
-    const patchedRunTexLoad = 'YA({async load(A){snaptexAssetUrls=A&&A.assets||null,zn=A&&A.base||A,Zn=await Xn("tex.wasm.gz"),Wn=new Uint8Array(await Xn("core.dump.gz"),0,65536*wn)},async texify';
-    const originalRenderStart = 's=async e=>{const t=e.childNodes[0].nodeValue';
-    const patchedRenderStart = 's=async e=>{if(!e.isConnected&&(!e.loader||!e.loader.isConnected))return;const t=e.childNodes[0].nodeValue';
-    const originalRenderError = 'catch(e){return console.log(e),void(r.outerHTML=\'<img src="//invalid.site/img-not-found.png">\')}';
-    const patchedRenderError = 'catch(e){console.log(e);const t=new CustomEvent("tikzjax-load-failed",{bubbles:!0,detail:{message:e&&e.message?e.message:"TikZ rendering failed."}});return void r.dispatchEvent(t)}';
-    const originalRenderReplace = 'if(r.replaceWith(a),!e.dataset.disableCache)try{';
-    const patchedRenderReplace = 'if(!r.isConnected)return;if(r.replaceWith(a),!e.dataset.disableCache)try{';
-
     if (!fs.existsSync(tikzJaxFile) || !fs.existsSync(runTexFile)) {
         return;
     }
 
-    let patched = false;
-    let source = fs.readFileSync(tikzJaxFile, 'utf8');
-
-    for (const patch of [
-        ['worker bootstrap', originalBootstrap, patchedBootstrap],
-        ['worker load args', originalLoad, patchedLoad],
-        ['worker terminate cleanup', originalTerminate, patchedTerminate],
-        ['stale script queue guard', originalRenderStart, patchedRenderStart],
-        ['compile failure event', originalRenderError, patchedRenderError],
-        ['disconnected loader guard', originalRenderReplace, patchedRenderReplace]
-    ]) {
-        const result = replaceOrThrow(source, patch[1], patch[2], patch[0]);
-        source = result.source;
-        patched = patched || result.patched;
-    }
-    if (patched) {
-        fs.writeFileSync(tikzJaxFile, source);
-    }
-
-    let runTexSource = fs.readFileSync(runTexFile, 'utf8');
-    let runTexPatched = false;
-    for (const patch of [
-        ['run-tex asset fetch', originalRunTexFetch, patchedRunTexFetch],
-        ['run-tex load args', originalRunTexLoad, patchedRunTexLoad]
-    ]) {
-        const result = replaceOrThrow(runTexSource, patch[1], patch[2], patch[0]);
-        runTexSource = result.source;
-        runTexPatched = runTexPatched || result.patched;
-    }
-    if (runTexPatched) {
-        fs.writeFileSync(runTexFile, runTexSource);
-        patched = true;
-    }
+    const tikzJaxPatched = patchTextFile(tikzJaxFile, createTikzJaxSourcePatches(runtimeAssetFiles));
+    const runTexPatched = patchTextFile(runTexFile, createRunTexSourcePatches());
+    const patched = tikzJaxPatched || runTexPatched;
 
     if (patched) {
         console.log('[build] Patched TikZJax worker bootstrap.');

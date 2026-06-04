@@ -28,7 +28,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         apply: (text, renderer: RenderContext) => {
             return text.replace(/\\([$])/g, (match, char) => {
                 const entities: Record<string, string> = { '$': '&#36;' };
-                return renderer.protect('raw', entities[char] || char);
+                return renderer.protectHtml('raw', entities[char] || char);
             });
         }
     },
@@ -44,7 +44,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
 
             // text = text.replace(/\\linespread\{[^}]+\}\s*/g, '');
 
-            text = text.replace(/\\noindent\s*/g, () => renderer.protect('raw', '<span class="no-indent-marker"></span>'));
+            text = text.replace(/\\noindent\s*/g, () => renderer.protectHtml('raw', '<span class="no-indent-marker"></span>'));
 
             return text;
         }
@@ -67,7 +67,6 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 return toRoman(parseInt(numStr), cmd === 'Rmnum');
             });
             return text;
-            // return text.replace(/\\noindent\s*/g, () => renderer.protect('raw', '<span class="no-indent-marker"></span>'));
         }
     },
 
@@ -112,17 +111,17 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 const afterMatch = fullString.substring(offset + match.length);
                 const isFollowedByText = /^\s*\S/.test(afterMatch) && !/^\s*\n\n/.test(afterMatch);
 
-                const hiddenLabels = hiddenHtml ? renderer.protect('raw', hiddenHtml) : '';
+                const hiddenLabels = hiddenHtml ? renderer.protectHtml('raw', hiddenHtml) : '';
                 let result = protectedTag + hiddenLabels;
                 if (eqNumHTML) {
-                    result = renderer.protect('math-block', `<div class="equation-container" style="position: relative; width: 100%;">
+                    result = renderer.protectHtml('math-block', `<div class="equation-container" style="position: relative; width: 100%;">
                                 ${protectedTag}
                                 <span class="eq-no" style="position: absolute; right: 0; top: 50%; transform: translateY(-50%); pointer-events: none;">
                                     ${eqNumHTML}
                                 </span>
                             </div>${hiddenLabels}`);
                 }
-                return result + (isFollowedByText ? renderer.protect('raw', '<span class="no-indent-marker"></span>') : '');
+                return result + (isFollowedByText ? renderer.protectHtml('raw', '<span class="no-indent-marker"></span>') : '');
             });
         }
     },
@@ -155,7 +154,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
             // 1. Labels
             text = text.replace(new RegExp(R_LABEL, 'g'), (match, labelName) => {
                 // Protect raw HTML anchors so they survive inside Figure/Table blocks
-                return renderer.protect('raw', createHiddenLabelAnchor(labelName));
+                return renderer.protectHtml('raw', createHiddenLabelAnchor(labelName));
             });
 
             // 2. References (Numbering)
@@ -167,7 +166,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 });
                 const joinedLinks = htmlLinks.join(', ');
                 const result = (type === 'eqref') ? `(${joinedLinks})` : joinedLinks;
-                return renderer.protect('ref', result);
+                return renderer.protectHtml('ref', result);
             });
             return text;
         }
@@ -231,7 +230,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                     finalHtml = `(${content})`;
                 }
 
-                return renderer.protect('cite', finalHtml);
+                return renderer.protectHtml('cite', finalHtml);
             });
             return text;
         }
@@ -244,7 +243,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         apply: (text, renderer: RenderContext) => {
             return text.replace(new RegExp(R_BIBLIOGRAPHY, 'g'), (match, file) => {
                 if (renderer.citedKeys.length === 0) {
-                    return renderer.protect('bib', `<div class="latex-bibliography error">No citations found.</div>`);
+                    return renderer.protectHtml('bib', `<div class="latex-bibliography error">No citations found.</div>`);
                 }
                 const uniqueKeys = Array.from(new Set(renderer.citedKeys));
                 const sortedKeys = uniqueKeys.sort((a, b) => {
@@ -265,7 +264,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                     html += `<div class="bib-item" id="ref-${safeKey}" style="margin-bottom: 0.8em; padding-left: 2em; text-indent: -2em;">${content}</div>`;
                 });
                 html += `</div>`;
-                return renderer.protect('bib', html);
+                return renderer.protectHtml('bib', html);
             });
         }
     },
@@ -276,7 +275,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         apply: (text, renderer: RenderContext) => {
             return text.replace(/\\([%#&])/g, (match, char) => {
                 const entities: Record<string, string> = { '#': '&#35;', '&': '&amp;', '%': '&#37;' };
-                return renderer.protect('raw', entities[char] || char);
+                return renderer.protectHtml('raw', entities[char] || char);
             });
         }
     },
@@ -286,17 +285,17 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         priority: 100,
         apply: (text, renderer: RenderContext) => {
             let processed = text.replace(/``([\s\S]*?)''/g, (match, content) => {
-                const open = renderer.protect('quote', '&ldquo;');
-                const close = renderer.protect('quote', '&rdquo;');
+                const open = renderer.protectHtml('quote', '&ldquo;');
+                const close = renderer.protectHtml('quote', '&rdquo;');
                 return `${open}${content}${close}`;
             });
             processed = processed.replace(/`([\s\S]*?)'/g, (match, content) => {
-                const open = renderer.protect('quote', '&lsquo;');
-                const close = renderer.protect('quote', '&rsquo;');
+                const open = renderer.protectHtml('quote', '&lsquo;');
+                const close = renderer.protectHtml('quote', '&rsquo;');
                 return `${open}${content}${close}`;
             });
-            processed = processed.replace(/``/g, () => renderer.protect('quote', '&ldquo;'));
-            processed = processed.replace(/`/g, () => renderer.protect('quote', '&lsquo;'));
+            processed = processed.replace(/``/g, () => renderer.protectHtml('quote', '&ldquo;'));
+            processed = processed.replace(/`/g, () => renderer.protectHtml('quote', '&lsquo;'));
             return processed;
         }
     },
@@ -305,7 +304,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         name: 'latex_special_spaces',
         priority: 110,
         apply: (text, renderer: RenderContext) => {
-            return text.replace(/~/g, () => renderer.protect('space', '&nbsp;'));
+            return text.replace(/~/g, () => renderer.protectHtml('space', '&nbsp;'));
         }
     },
 
@@ -350,16 +349,16 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                     header += `.</strong></span>&nbsp; `;
                 }
 
-                let body = resolveLatexStyles(content.trim(), html => renderer.protect('style', html));
+                let body = resolveLatexStyles(content.trim(), html => renderer.protectHtml('style', html));
                 body = escapeHtml(body);
-                return `\n\n${renderer.protect('thm', `<div class="latex-theorem">${header}${body}</div>`)}\n\n`;
+                return `\n\n${renderer.protectHtml('thm', `<div class="latex-theorem">${header}${body}</div>`)}\n\n`;
             });
 
             text = text.replace(/\\begin\{proof\}(?:\[(.*?)\])?/gi, (match, optArg) => {
                 const title = optArg ? `Proof (${escapeHtml(optArg)}).` : `Proof.`;
-                return `\n${renderer.protect('raw', '<span class="no-indent-marker"></span>')}**${title}** `;
+                return `\n${renderer.protectHtml('raw', '<span class="no-indent-marker"></span>')}**${title}** `;
             });
-            return text.replace(/\\end\{proof\}/gi, () => ` ${renderer.protect('raw', '<span style="float:right;">QED</span>')}\n`);
+            return text.replace(/\\end\{proof\}/gi, () => ` ${renderer.protectHtml('raw', '<span style="float:right;">QED</span>')}\n`);
         }
     },
 
@@ -375,11 +374,11 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
 
                 const processMeta = (val: string | undefined) => {
                     if (!val) {return '';}
-                    const lineBreakToken = renderer.protect('meta-br', '<br/>');
+                    const lineBreakToken = renderer.protectHtml('meta-br', '<br/>');
                     let res = val.replace(/<br\s*\/?>/gi, lineBreakToken);
                     res = res.replace(/\\\\/g, lineBreakToken);
                     res = res.replace(/\$((?:\\.|[^\\$])+?)\$/g, (m: string, c: string) => renderMath(c.trim(), false, renderer));
-                    res = resolveLatexStyles(res, html => renderer.protect('style', html));
+                    res = resolveLatexStyles(res, html => renderer.protectHtml('style', html));
                     res = escapeHtml(res);
                     return res;
                 };
@@ -392,7 +391,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 if (safeAuthor) { titleBlock += `<div class="latex-author">${safeAuthor}</div>`; }
                 if (safeDate) { titleBlock += `<div class="latex-date">${safeDate}</div>`; }
 
-                text = text.replace(/\\maketitle.*/g, `\n\n` + renderer.protect('meta', titleBlock) + `\n\n`);
+                text = text.replace(/\\maketitle.*/g, `\n\n` + renderer.protectHtml('meta', titleBlock) + `\n\n`);
                 text = text.replace(/ \[meta:.*?\]/g, '');
             }
 
@@ -436,8 +435,8 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                     const labelName = label.match(/\{([^}]+)\}/)?.[1] || "";
                     anchor = createHiddenLabelAnchor(labelName);
                 }
-                if(anchor) {anchor = renderer.protect('anchor', anchor);}
-                if(numHtml) {numHtml = renderer.protect('secnum', numHtml);}
+                if(anchor) {anchor = renderer.protectHtml('anchor', anchor);}
+                if(numHtml) {numHtml = renderer.protectHtml('secnum', numHtml);}
 
                 return `\n${prefix} ${numHtml}${content.trim()} ${anchor}\n`;
             });
@@ -474,7 +473,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         name: 'text_styles',
         priority: 190,
         apply: (text, renderer: RenderContext) => {
-            return resolveLatexStyles(text, html => renderer.protect('style', html));
+            return resolveLatexStyles(text, html => renderer.protectHtml('style', html));
         }
     }
 ];

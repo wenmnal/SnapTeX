@@ -1,7 +1,7 @@
 # SnapTeX Optimization TODO
 
 > Current branch: `dev`
-> Last verified: `npm test` passed with 57 tests after extension-host update posting cleanup.
+> Last verified: `npm test` passed with 84 tests after webview message contracts, TikZJax patch-spec refactor, and focused test-suite split.
 > Rule for future work: keep each change block small, add or update tests before behavior changes, then run `npm test` and commit only the files for that block.
 
 ## Overall Goal
@@ -23,6 +23,7 @@
 - [x] Add active-render and batch-render watchdogs so stuck TikZ jobs do not permanently block subsequent renders.
 - [x] Coalesce TikZ render requests so edits during a running batch only schedule the latest pending batch.
 - [x] Keep main-preview TikZ scanning scoped to `#content-root`; tooltip TikZ stays on its own immediate path.
+- [x] Refactor build-time TikZJax vendor patches into named patch specs so future upstream changes fail with clearer targets.
 
 ### Block Virtualization and On-Demand HTML
 
@@ -128,6 +129,10 @@
 - [x] `normalizeUri()`.
   - Windows/file lowercase behavior.
   - Remote URI path case preservation.
+- [x] Webview message contracts.
+  - Shared extension-to-webview and webview-to-extension command constants.
+  - Runtime guard for incoming webview messages.
+  - Exhaustive extension-host message switch.
 
 ### Commits Created
 
@@ -153,6 +158,15 @@
 - [x] `aeb0767 Add long document fixture smoke test`
 - [x] `9edd2ec Implement block shell virtualization`
 - [x] `6e0acbc Implement on-demand block HTML loading`
+- [x] `4158716 Harden user-controlled preview HTML`
+- [x] `effb5ff Tighten preview HTML trust boundary`
+- [x] `5256955 Align renderOnSwitch default fallback`
+- [x] `5f9eeda Sync optimization plan status`
+- [x] `043deba Protect display math containers with raw HTML disabled`
+- [x] `63ce2db Make rule HTML protection explicit`
+- [x] `2304140 Define typed webview message contracts`
+- [x] `5f730d7 Refactor TikZJax vendor patch specs`
+- [x] `a1aeb6f Split focused core test suites`
 
 ## Pending: Next Correctness and Architecture Work
 
@@ -218,15 +232,21 @@
 
 ### B. Test Infrastructure
 
-- [ ] Split the growing `src/test/extension.test.ts` into focused files.
-  - `diff.test.ts`
-  - `splitter.test.ts`
-  - `scanner.test.ts`
-  - `metadata.test.ts`
+- [x] Split pure/core suites out of the growing `src/test/extension.test.ts`.
+  - [x] `diff.test.ts`
+  - [x] `splitter.test.ts`
+  - [x] `scanner.test.ts`
+  - [x] `bib.test.ts`
+  - [x] `metadata.test.ts`
+  - [x] `protection.test.ts`
+  - [x] `uri.test.ts`
+  - [x] `utils.test.ts`
+  - [x] `webview-messages.test.ts`
+- [ ] Continue splitting the remaining larger integration suites.
   - `document.test.ts`
   - `renderer.test.ts`
-  - `utils.test.ts`
   - `panel-security.test.ts`
+  - `webview-resource.test.ts`
 - [ ] Add fixture files under `src/test/fixtures/`.
   - `basic.tex`
   - `math-labels.tex`
@@ -241,7 +261,7 @@
 - [ ] Add renderer snapshot-style tests for representative blocks.
 - [ ] Add source mapping tests for included files with line offsets and labels.
 - [x] Add a fixture-backed long-document smoke test.
-- [ ] Continue splitting the growing monolithic test file into focused files.
+- [ ] Continue splitting the remaining integration-heavy tests out of `src/test/extension.test.ts`.
 
 ### C. Memory Instrumentation and Low-Risk Wins
 
@@ -322,8 +342,8 @@
   - scroll-sync.
   - tooltip.
   - types.
-- [ ] Define strict extension-to-webview and webview-to-extension message types.
-- [ ] Add exhaustiveness checks for message switches.
+- [x] Define strict extension-to-webview and webview-to-extension message types.
+- [x] Add an exhaustiveness check for the extension-host webview message switch.
 
 ### H. Span/Hash Document Model
 
