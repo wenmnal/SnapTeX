@@ -602,6 +602,20 @@ suite('PDF request validation', () => {
         assert.match(webviewSource, /await pdfWorkerReady/);
     });
 
+    test('sends full updates as block payloads without building a giant binary html buffer', () => {
+        const repoRoot = path.resolve(__dirname, '..', '..');
+        const panelSource = fs.readFileSync(path.join(repoRoot, 'src', 'panel.ts'), 'utf8');
+        const webviewSource = fs.readFileSync(path.join(repoRoot, 'media', 'webview.html'), 'utf8');
+
+        assert.match(panelSource, /payload\.htmls = payload\.htmls\.map\(h => fixPaths\(h\)\)/);
+        assert.match(panelSource, /this\._panel\.webview\.postMessage\(\{ command: 'update', payload \}\)/);
+        assert.doesNotMatch(panelSource, /Buffer\.from\(fullHtml\)/);
+        assert.doesNotMatch(panelSource, /command: 'update_binary'/);
+        assert.match(webviewSource, /smartFullUpdateFromBlocks\(htmls, preserveUnchangedBlocks = true\)/);
+        assert.match(webviewSource, /parseBlockHtml\(html\)/);
+        assert.match(webviewSource, /this\.smartFullUpdateFromBlocks\(payload\.htmls, payload\.preserveUnchangedBlocks !== false\)/);
+    });
+
     test('releases far-offscreen PDF canvas bitmaps while preserving layout for rerender', () => {
         const repoRoot = path.resolve(__dirname, '..', '..');
         const webviewSource = fs.readFileSync(path.join(repoRoot, 'media', 'webview.html'), 'utf8');

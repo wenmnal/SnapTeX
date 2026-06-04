@@ -1,7 +1,7 @@
 # SnapTeX Optimization TODO
 
 > Current branch: `dev`  
-> Last verified: `npm test` passed with 44 tests after adding far-offscreen PDF canvas bitmap release.
+> Last verified: `npm test` passed with 45 tests after switching default full updates to block payloads.
 > Rule for future work: keep each change block small, add or update tests before behavior changes, then run `npm test` and commit only the files for that block.
 
 ## Overall Goal
@@ -121,7 +121,7 @@
   - Do not include numbering, references, PDF/TikZ runtime state, or generated DOM in the hash.
   - Keep numbering/reference updates on the existing `payload.numbering -> applyNumbering()` path.
 - [x] 3. Release far-offscreen PDF canvas bitmaps and rerender them when they return near the viewport.
-- [ ] 4. Start the full-update payload transition with a low-risk block payload path.
+- [x] 4. Start the full-update payload transition with a low-risk block payload path.
 - [ ] 5. Prepare shell-based block virtualization without turning it on globally.
 - [ ] 6. Split or strengthen tests where the current monolithic suite is making changes risky.
 - [ ] 7. Apply low-risk security and architecture cleanup only where tests can pin behavior.
@@ -242,13 +242,13 @@
 ### E. Full Update Payload and DOM Update Model
 
 - [ ] Define `RenderedBlockPayload` and `FullBlocksPayload`.
-- [ ] Change full render payload from one giant HTML string to block payloads.
-- [ ] Apply `fixPaths()` per block without `htmls.join('')`.
-- [ ] Stop creating `Buffer.from(fullHtml)` for full updates by default.
-- [ ] Add a `full_blocks` webview handler.
+- [x] Change default full render payload from one giant HTML string to block payloads.
+- [x] Apply `fixPaths()` per block without `htmls.join('')`.
+- [x] Stop creating `Buffer.from(fullHtml)` for full updates by default.
+- [x] Add a block-list full update path in the webview.
 - [ ] Batch append block DOM in the webview.
-- [ ] Stop using `DOMParser.parseFromString(wholeHtml)` for full updates.
-- [ ] Keep `update_binary` as fallback until the new path is stable.
+- [x] Stop using `DOMParser.parseFromString(wholeHtml)` on the default full update path.
+- [x] Keep `update_binary` as fallback until the new path is stable.
 
 ### F. Block Hashes and Diff Improvements
 

@@ -762,7 +762,11 @@
                 this.setState('RENDERING');
                 const scrollState = this.saveScrollState();
                 document.body.classList.add('preload-mode');
-                this.smartFullUpdate(payload.html, payload.preserveUnchangedBlocks !== false);
+                if (payload.htmls) {
+                    this.smartFullUpdateFromBlocks(payload.htmls, payload.preserveUnchangedBlocks !== false);
+                } else {
+                    this.smartFullUpdate(payload.html, payload.preserveUnchangedBlocks !== false);
+                }
                 this.logDomStats('after full update');
                 document.fonts.ready.then(() => {
                     requestAnimationFrame(() => {
@@ -1050,6 +1054,23 @@
             const parser = new DOMParser();
             const newDoc = parser.parseFromString(newHtml, 'text/html');
             const newElements = Array.from(newDoc.body.children);
+            this.smartFullUpdateElements(newElements, preserveUnchangedBlocks);
+        }
+
+        parseBlockHtml(html) {
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = html;
+            return tempDiv.firstElementChild;
+        }
+
+        smartFullUpdateFromBlocks(htmls, preserveUnchangedBlocks = true) {
+            const newElements = htmls
+                .map(html => this.parseBlockHtml(html))
+                .filter(Boolean);
+            this.smartFullUpdateElements(newElements, preserveUnchangedBlocks);
+        }
+
+        smartFullUpdateElements(newElements, preserveUnchangedBlocks = true) {
             const oldElements = Array.from(this.contentRoot.children);
             const maxLen = Math.max(newElements.length, oldElements.length);
             for (let i = 0; i < maxLen; i++) {
