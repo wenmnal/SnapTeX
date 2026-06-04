@@ -1,5 +1,5 @@
 import { MetadataResult } from './types';
-import { findCommand } from './utils';
+import { findBalancedClosingBrace, findCommand } from './utils';
 
 /**
  * Helper to transpile \newcommand to \def for TikZJax.
@@ -37,6 +37,101 @@ function extractMacroName(def: string): string | null {
         return match[1] || match[2] || match[3];
     }
     return null;
+}
+
+interface TextRange {
+    start: number;
+    end: number;
+}
+
+function skipWhitespace(text: string, index: number): number {
+    let i = index;
+    while (i < text.length && /\s/.test(text[i])) { i++; }
+    return i;
+}
+
+function findClosingBracket(text: string, startIndex: number): number {
+    let depth = 0;
+    for (let i = startIndex; i < text.length; i++) {
+        const char = text[i];
+        if (char === '\\') {
+            i++;
+            continue;
+        }
+        if (char === '[') {
+            depth++;
+        } else if (char === ']') {
+            depth--;
+            if (depth === 0) { return i; }
+        }
+    }
+    return -1;
+}
+
+function consumeControlSequence(text: string, index: number): number {
+    if (text[index] !== '\\') { return index; }
+    let i = index + 1;
+    while (i < text.length && /[a-zA-Z@]/.test(text[i])) { i++; }
+    return i > index + 1 ? i : index + 2;
+}
+
+function findDefinitionEnd(text: string, tokenEndIndex: number): number {
+    let i = tokenEndIndex;
+    let consumedGroup = false;
+
+    while (i < text.length) {
+        const beforeWhitespace = i;
+        i = skipWhitespace(text, i);
+        const char = text[i];
+
+        if (char === '[') {
+            const close = findClosingBracket(text, i);
+            if (close === -1) { return -1; }
+            i = close + 1;
+            continue;
+        }
+
+        if (char === '{') {
+            const close = findBalancedClosingBrace(text, i);
+            if (close === -1) { return -1; }
+            consumedGroup = true;
+            i = close + 1;
+            continue;
+        }
+
+        if (!consumedGroup && char === '\\') {
+            i = consumeControlSequence(text, i);
+            continue;
+        }
+
+        if (!consumedGroup) {
+            i++;
+            continue;
+        }
+
+        return beforeWhitespace;
+    }
+
+    return consumedGroup ? i : -1;
+}
+
+function blankOutRanges(text: string, ranges: TextRange[]): string {
+    if (ranges.length === 0) { return text; }
+
+    const sorted = [...ranges].sort((a, b) => a.start - b.start);
+    let result = "";
+    let cursor = 0;
+
+    for (const range of sorted) {
+        const start = Math.max(cursor, range.start);
+        const end = Math.max(start, range.end);
+        result += text.substring(cursor, start);
+        result += text.substring(start, end).replace(/[^\r\n]/g, '');
+        cursor = end;
+    }
+
+    result += text.substring(cursor);
+    return result;
 }
 
 export function extractMetadata(text: string): MetadataResult {
@@ -82,6 +177,7 @@ export function extractMetadata(text: string): MetadataResult {
     // --- Split Extraction Logic ---
     const tikzGlobalParts: string[] = [];
     const tikzMacroMap = new Map<string, string>();
+    const definitionRanges: TextRange[] = [];
 
     // Regex to capture ALL definitions (Global & Macros)
     const defRegex = /\\(provide|re)?(newcommand|def|gdef|DeclareMathOperator|usetikzlibrary|tikzset|definecolor)(\*?)/g;
@@ -89,34 +185,12 @@ export function extractMetadata(text: string): MetadataResult {
     let defMatch;
     while ((defMatch = defRegex.exec(cleanedText)) !== null) {
         const startIdx = defMatch.index;
-        let openBraces = 0;
-        let endIdx = -1;
-        let foundStart = false;
-
-        // Brace matching logic
-        for (let i = startIdx + defMatch[0].length; i < cleanedText.length; i++) {
-             const char = cleanedText[i];
-             if (char === '{') {
-                 if (!foundStart) {foundStart = true;}
-                 openBraces++;
-             } else if (char === '}') {
-                 openBraces--;
-             }
-             if (foundStart && openBraces === 0) {
-                 let nextIdx = i + 1;
-                 while (nextIdx < cleanedText.length && /\s/.test(cleanedText[nextIdx])) {nextIdx++;}
-                 if (nextIdx < cleanedText.length && cleanedText[nextIdx] === '{') {
-                     i = nextIdx - 1;
-                     continue;
-                 } else {
-                     endIdx = i + 1;
-                     break;
-                 }
-             }
-        }
+        const endIdx = findDefinitionEnd(cleanedText, startIdx + defMatch[0].length);
 
         if (endIdx !== -1) {
              const fullDef = cleanedText.substring(startIdx, endIdx);
+             definitionRanges.push({ start: startIdx, end: endIdx });
+             defRegex.lastIndex = endIdx;
 
              // Check type
              if (/\\(usetikzlibrary|tikzset|definecolor)/.test(fullDef)) {
@@ -171,5 +245,6 @@ export function extractMetadata(text: string): MetadataResult {
             }
         }
     }
+    cleanedText = blankOutRanges(cleanedText, definitionRanges);
     return { data: { macros, tikzGlobal, tikzMacroMap, title, author, date }, cleanedText };
 }

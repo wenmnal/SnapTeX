@@ -160,6 +160,39 @@ suite('LatexBlockSplitter', () => {
         assert.match(blocks[1].text, /\\end\{figure\*\}/);
         assert.equal(blocks[2].text.trim(), 'After figure.');
     });
+
+    test('does not emergency-split long closed TikZ figures with internal blank lines', () => {
+        const tikzBody = Array.from({ length: 65 }, (_, index) => (
+            index % 8 === 0
+                ? ''
+                : `\\node at (${index}, 0) {Point ${index}};`
+        ));
+        const text = [
+            'Before.',
+            '',
+            '\\begin{figure}[t]',
+            '\\centering',
+            '\\resizebox{\\linewidth}{!}{%',
+            '\\begin{tikzpicture}[>=Latex]',
+            ...tikzBody,
+            '\\end{tikzpicture}',
+            '}',
+            '\\label{fig:long-tikz}',
+            '\\end{figure}',
+            '',
+            'After.'
+        ].join('\n');
+
+        const blocks = LatexBlockSplitter.split(text);
+        const tikzBlocks = blocks.filter(block => /tikzpicture/.test(block.text));
+
+        assert.equal(tikzBlocks.length, 1);
+        assert.match(tikzBlocks[0].text, /\\begin\{figure\}/);
+        assert.match(tikzBlocks[0].text, /\\begin\{tikzpicture\}/);
+        assert.match(tikzBlocks[0].text, /\\end\{tikzpicture\}/);
+        assert.match(tikzBlocks[0].text, /\\end\{figure\}/);
+        assert.match(blocks.map(block => block.text).join('\n'), /After\./);
+    });
 });
 
 suite('LatexCounterScanner', () => {
@@ -323,6 +356,50 @@ suite('LatexDocument source mapping', () => {
         assert.equal(result.bibEntries.get('smith2024')?.fields.title, 'Paper');
         assert.equal(result.contentStartLineOffset, 0);
         assert.equal(result.blockTexts.length, 1);
+    });
+
+    test('inlines standalone TikZ inputs without treating their document end as the root end', async () => {
+        const mainUri = vscode.Uri.file('/project/main.tex');
+        const figureUri = vscode.Uri.file('/project/figures/fold_illus_reliever.tex');
+        const provider = new MemoryFileProvider(new Map([
+            [normalizeUri(mainUri), [
+                '\\documentclass{article}',
+                '\\begin{document}',
+                'Before figure.',
+                '\\begin{figure}[t]',
+                '\\centering',
+                '\\resizebox{\\linewidth}{!}{%',
+                '\\input{figures/fold_illus_reliever.tex}',
+                '}',
+                '\\label{fig:illus_reliever}',
+                '\\end{figure}',
+                'After figure should remain.',
+                '\\end{document}'
+            ].join('\n')],
+            [normalizeUri(figureUri), readFixture('fold_illus_reliever.tex')]
+        ]));
+        const doc = new LatexDocument(provider);
+
+        const result = await doc.parse(mainUri);
+        doc.applyResult(result);
+        const joinedBlocks = result.blockTexts.join('\n');
+        const html = new SmartRenderer(provider).render(doc).htmls?.join('') ?? '';
+        const visibleHtml = html.replace(/<script type="text\/snaptex-tikz"[\s\S]*?<\/script>/g, '');
+
+        assert.match(joinedBlocks, /After figure should remain/);
+        assert.doesNotMatch(joinedBlocks, /\\documentclass\[tikz/);
+        assert.doesNotMatch(joinedBlocks, /\\end\{document\}/);
+        assert.match(result.metadata.tikzGlobal, /\\usetikzlibrary\{[^}]*patterns[^}]*arrows\.meta[^}]*\}/);
+        assert.match(result.metadata.tikzGlobal, /\\definecolor\{col1\}/);
+        assert.match(result.metadata.tikzMacroMap.get('\\legendBox') ?? '', /\\def\\legendBox#1/);
+        assert.match(html, /type="text\/snaptex-tikz"/);
+        assert.match(html, /After figure should remain/);
+        assert.doesNotMatch(html, /\\newcommand\{\\legendBox\}/);
+        assert.doesNotMatch(visibleHtml, /\\begin\{tikzpicture\}/);
+        assert.doesNotMatch(visibleHtml, /\\node at/);
+        assert.doesNotMatch(visibleHtml, /\\begin\{figure\}/);
+        assert.doesNotMatch(visibleHtml, /\\resizebox/);
+        assert.doesNotMatch(visibleHtml, /\\end\{figure\}/);
     });
 });
 
@@ -879,8 +956,11 @@ suite('Metadata extraction', () => {
         assert.match(result.data.tikzGlobal, /\\usetikzlibrary\{arrows\.meta\}/);
         assert.match(result.data.tikzGlobal, /\\tikzset\{box\/.style=\{draw\}\}/);
         assert.equal(result.data.tikzMacroMap.get('\\origin'), '\\def\\origin{(0,0)}');
+        assert.equal(result.data.tikzMacroMap.get('\\vect'), '\\def\\vect#1{\\mathbf{#1}}');
         assert.doesNotMatch(result.cleanedText, /\\title/);
         assert.doesNotMatch(result.cleanedText, /\\author/);
+        assert.doesNotMatch(result.cleanedText, /\\newcommand\{\\vect\}/);
+        assert.doesNotMatch(result.cleanedText, /\\usetikzlibrary/);
     });
 });
 
