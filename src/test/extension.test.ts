@@ -296,10 +296,34 @@ suite('SmartRenderer', () => {
         assert.match(html, /class="latex-table"/);
         assert.match(html, /id="tab:notation_loss"/);
         assert.match(html, /<span style="color: red">Summary of loss notation/);
-        assert.match(html, /<table[^>]*>/);
-        assert.match(html, /<strong>Notation<\/strong>/);
-        assert.match(html, /<td[^>]*>Expected \{individual\} loss of <em>fixed<\/em> model/);
+        assert.match(html, /<table class="latex-tabular-preview latex-tabular-booktabs">/);
+        assert.match(html, /<thead><tr><th scope="col"><strong>Notation<\/strong><\/th>/);
+        assert.match(html, /<tbody><tr><td>.*Expected individual loss of <em>fixed<\/em> model/s);
+        assert.doesNotMatch(html, /border: 1px solid/);
         assert.doesNotMatch(html, /\\begin\{tabularx\}|\\toprule|\\bottomrule/);
+    });
+
+    test('renders plain hline tables without markdown-style grid borders', () => {
+        const html = renderBlocks([
+            [
+                '\\begin{table}',
+                '\\caption{Plain table}',
+                '\\begin{tabular}{lr}',
+                '\\hline',
+                '\\textbf{Name} & \\textbf{Value} \\\\',
+                '\\hline',
+                'Alpha & 10 \\\\',
+                'Beta & 20 \\\\',
+                '\\hline',
+                '\\end{tabular}',
+                '\\end{table}'
+            ].join('\n')
+        ]);
+
+        assert.match(html, /<table class="latex-tabular-preview latex-tabular-ruled">/);
+        assert.match(html, /<thead><tr><th scope="col"><strong>Name<\/strong><\/th><th scope="col"><strong>Value<\/strong><\/th><\/tr><\/thead>/);
+        assert.match(html, /<tbody><tr><td>Alpha<\/td><td>10<\/td><\/tr>/);
+        assert.doesNotMatch(html, /border: 1px solid/);
     });
 
     test('removes standalone comment lines without creating blank preview gaps', () => {

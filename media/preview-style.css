@@ -323,46 +323,88 @@ body.vscode-dark .tikz-container svg [fill="rgb(0, 0, 0)"] {
 .latex-figure { text-align: center; margin: 20px 0; }
 .latex-figure img { max-width: 100%; height: auto; }
 
-/* --- Table Scroll Handling --- */
+/* Table preview */
+.latex-table {
+    margin: 1.35em 0;
+}
 
-/* 1. 限制表格容器的宽度，并允许横向滚动 */
+.latex-table .table-caption {
+    text-align: center;
+    margin: 0 0 0.65em;
+    font-size: 0.95em;
+    line-height: 1.35;
+}
+
 .latex-table .table-body {
     width: 100%;
-    overflow-x: auto; /* 关键：内容超出时显示横向滚动条 */
+    overflow-x: auto;
     display: block;
-    margin-bottom: 10px;
-
-    /* 优化滚动体验 */
+    margin-bottom: 0.6em;
     -webkit-overflow-scrolling: touch;
-
-    /* 可选：美化滚动条 (适配 VS Code 风格) */
     scrollbar-color: var(--vscode-scrollbarSlider-background) transparent;
     scrollbar-width: thin;
 }
 
-/* 2. 确保表格本身可以自由伸缩，不要被强行压缩 */
 .latex-table table {
-    width: auto;         /* 让表格根据内容自动决定宽度 */
-    min-width: 100%;     /* 至少占满容器 */
-    max-width: none;     /* 允许超出容器宽度 */
+    width: auto;
+    min-width: min(100%, 38rem);
+    max-width: none;
     border-collapse: collapse;
+    border-spacing: 0;
     margin: 0 auto;
+    font-size: 0.94em;
+    line-height: 1.35;
+    color: var(--vscode-editor-foreground);
 }
 
-/* 3. 单元格样式微调 */
+.latex-table .latex-tabular-preview {
+    border-top: 1.6px solid var(--vscode-editor-foreground);
+    border-bottom: 1.6px solid var(--vscode-editor-foreground);
+}
+
 .latex-table td,
 .latex-table th {
-    /* 防止单元格内容换行导致行高过大（可选，根据喜好开启） */
-    /* white-space: nowrap; */
-
-    /* 保持一定的内边距 */
-    padding: 6px 12px;
-    border: 1px solid var(--vscode-editor-lineHighlightBorder, #ddd);
+    padding: 0.42em 0.85em;
+    border: 0;
+    vertical-align: top;
+    text-align: left;
 }
 
-/* 4. Webkit 滚动条样式 (Chrome/VS Code 内部内核) */
+.latex-table th {
+    font-weight: 600;
+}
+
+.latex-table thead tr:last-child th {
+    border-bottom: 1px solid var(--vscode-editor-foreground);
+}
+
+.latex-table tr.table-row-rule-above td,
+.latex-table tr.table-row-rule-above th {
+    border-top: 1px solid var(--vscode-editor-foreground);
+}
+
+.latex-table .table-cell-align-center {
+    text-align: center;
+}
+
+.latex-table .table-cell-align-right {
+    text-align: right;
+}
+
+.latex-table .latex-tablenotes {
+    max-width: min(100%, 52rem);
+    margin: 0.45em auto 0;
+    font-size: 0.86em;
+    line-height: 1.35;
+}
+
+.latex-table .latex-tablenotes ul {
+    margin: 0;
+    padding-left: 0;
+}
+
 .latex-table .table-body::-webkit-scrollbar {
-    height: 8px; /* 横向滚动条高度 */
+    height: 8px;
 }
 
 .latex-table .table-body::-webkit-scrollbar-thumb {
