@@ -378,6 +378,7 @@ suite('SmartRenderer', () => {
                 '\\midrule',
                 '\\multirow{2}{*}{A} & x & 1 \\\\',
                 ' & y & 2 \\\\',
+                'Hausdorff distance & \\multicolumn{2}{c}{\\{22, 9\\}} \\\\',
                 '\\bottomrule',
                 '\\end{tabular}',
                 '\\end{table}'
@@ -386,7 +387,37 @@ suite('SmartRenderer', () => {
 
         assert.match(html, /<th scope="col" colspan="2" class="table-cell-align-center"><strong>Group<\/strong><\/th>/);
         assert.match(html, /<td rowspan="2">A<\/td><td>x<\/td><td>1<\/td>/);
+        assert.match(html, /<td>Hausdorff distance<\/td><td colspan="2" class="table-cell-align-center">\{22, 9\}<\/td>/);
         assert.doesNotMatch(html, /\\multicolumn|\\multirow/);
+    });
+
+    test('renders makecell line breaks and table note markers', () => {
+        const html = renderBlocks([
+            [
+                '\\begin{table}[!ht]',
+                '\\begin{threeparttable}',
+                '\\caption{Model table}',
+                '\\begin{tabular*}{\\textwidth}{ccc}',
+                '\\toprule',
+                'Model & Loss & Estimator \\\\',
+                '\\midrule',
+                '\\makecell{$f_i^\\ast=(\\mu_i,\\Omega_i)$,\\\\ $P_i=\\mathcal{N}(\\mu_i,\\Omega_i^{-1})$} & $\\sum_{i\\in I}(y_i-x_i)^2$ & $\\hat f_I$\\tnote{$\\mathparagraph$} \\\\',
+                '\\bottomrule',
+                '\\end{tabular*}',
+                '\\begin{tablenotes}[flushleft]\\footnotesize',
+                '\\item[$\\mathparagraph$] The superscript marks a regularized estimator with $\\alpha\\in(0,1)$.',
+                '\\end{tablenotes}',
+                '\\end{threeparttable}',
+                '\\end{table}'
+            ].join('\n')
+        ]);
+
+        assert.match(html, /<span class="latex-makecell">/);
+        assert.equal(html.match(/latex-makecell-line/g)?.length, 2);
+        assert.match(html, /<sup class="latex-tnote">/);
+        assert.match(html, /<div class="latex-tablenotes"><ul><li class="note-item"/);
+        assert.match(html, /regularized estimator/);
+        assert.doesNotMatch(html, /\\makecell|\\tnote|XSNAP/);
     });
 
     test('removes standalone comment lines without creating blank preview gaps', () => {

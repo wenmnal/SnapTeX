@@ -413,6 +413,25 @@ body.vscode-dark .tikz-container svg [fill="rgb(0, 0, 0)"] {
     align-items: flex-start;
 }
 
+.latex-table .latex-makecell {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 0.12em;
+    vertical-align: middle;
+}
+
+.latex-table .latex-makecell-line {
+    display: block;
+    white-space: nowrap;
+}
+
+.latex-table .latex-tnote {
+    margin-left: 0.12em;
+    font-size: 0.72em;
+    line-height: 0;
+    vertical-align: super;
+}
+
 .latex-table .latex-tablenotes {
     max-width: min(100%, 52rem);
     margin: 0.45em auto 0;

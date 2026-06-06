@@ -1,7 +1,7 @@
 import { PreprocessRule, RenderContext } from './types';
 import { escapeHtmlAttribute, extractAndHideLabels, findCommand, resolveLatexStyles } from './utils';
-import { recoverPreservedTokens, renderCaptionContent, renderMath, unwrapResizeboxAroundProtectedContent } from './rule-helpers';
-import { findFirstTabularEnvironment, renderLatexTabular } from './latex-table';
+import { recoverPreservedTokens, renderCaptionContent, unwrapResizeboxAroundProtectedContent } from './rule-helpers';
+import { findFirstTabularEnvironment, renderLatexTabular, renderLatexTableInlineContent } from './latex-table';
 
 /**
  * Converts LaTeX figure environments to protected HTML, preserving captions,
@@ -150,11 +150,10 @@ export function createTableRule(): PreprocessRule {
                         let labelHtml = '';
                         const lblMatch = item.match(/^\s*\[(.*?)\]/);
                         if (lblMatch) {
-                            labelHtml = `<strong>${renderer.renderInline(lblMatch[1])}</strong> `;
+                            labelHtml = `<strong>${renderLatexTableInlineContent(lblMatch[1], renderer)}</strong> `;
                             itemText = item.substring(lblMatch[0].length);
                         }
-                        itemText = itemText.replace(/\$((?:\\.|[^\\$])+?)\$/g, (_m: string, c: string) => renderMath(c.trim(), false, renderer));
-                        return `<li class="note-item" style="list-style:none">${labelHtml}${renderer.renderInline(itemText.trim())}</li>`;
+                        return `<li class="note-item" style="list-style:none">${labelHtml}${renderLatexTableInlineContent(itemText.trim(), renderer)}</li>`;
                     }).join('');
                     notesHtml = `<div class="latex-tablenotes"><ul>${noteItems}</ul></div>`;
                 }

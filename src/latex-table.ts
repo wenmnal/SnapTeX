@@ -20,6 +20,11 @@ interface LatexGroup {
     end: number;
 }
 
+interface LatexCommandCall {
+    groups: LatexGroup[];
+    end: number;
+}
+
 export interface TabularEnvironment {
     envName: string;
     beginStart: number;
@@ -87,11 +92,13 @@ function skipOptionalBracket(text: string, startIndex: number): number {
     return startIndex;
 }
 
-function readCommandGroups(text: string, commandName: string, groupCount: number): LatexGroup[] | undefined {
-    if (!text.startsWith(`\\${commandName}`)) { return undefined; }
+function readCommandCallAt(text: string, startIndex: number, commandName: string, groupCount: number): LatexCommandCall | undefined {
+    const command = `\\${commandName}`;
+    if (!text.startsWith(command, startIndex)) { return undefined; }
+    if (/[a-zA-Z]/.test(text[startIndex + command.length] ?? '')) { return undefined; }
 
     const groups: LatexGroup[] = [];
-    let index = `\\${commandName}`.length;
+    let index = startIndex + command.length;
     const skippedOptional = skipOptionalBracket(text, index);
     if (skippedOptional !== index) {
         index = skippedOptional;
@@ -104,7 +111,38 @@ function readCommandGroups(text: string, commandName: string, groupCount: number
         index = group.end;
     }
 
-    return groups;
+    return { groups, end: index };
+}
+
+function readCommandGroups(text: string, commandName: string, groupCount: number): LatexGroup[] | undefined {
+    return readCommandCallAt(text, 0, commandName, groupCount)?.groups;
+}
+
+function replaceLatexCommand(text: string, commandName: string, groupCount: number, render: (call: LatexCommandCall) => string): string {
+    let result = '';
+    let index = 0;
+    const command = `\\${commandName}`;
+
+    while (index < text.length) {
+        const commandIndex = text.indexOf(command, index);
+        if (commandIndex === -1) {
+            result += text.substring(index);
+            break;
+        }
+
+        result += text.substring(index, commandIndex);
+        const call = readCommandCallAt(text, commandIndex, commandName, groupCount);
+        if (!call) {
+            result += command;
+            index = commandIndex + command.length;
+            continue;
+        }
+
+        result += render(call);
+        index = call.end;
+    }
+
+    return result;
 }
 
 function getTabularRequiredArgCount(envName: string): number {
@@ -336,7 +374,14 @@ function cleanLatexTableCell(text: string): string {
 }
 
 function stripLatexGroupingBraces(text: string): string {
-    return text.replace(/\{([^{}]*)\}/g, '$1');
+    const openBrace = '\uE000';
+    const closeBrace = '\uE001';
+    return text
+        .replace(/\\\{/g, openBrace)
+        .replace(/\\\}/g, closeBrace)
+        .replace(/\{([^{}]*)\}/g, '$1')
+        .replace(new RegExp(openBrace, 'g'), '{')
+        .replace(new RegExp(closeBrace, 'g'), '}');
 }
 
 function readColumnModifierGroups(columnSpec: string): { before: string[]; after: string[] } {
@@ -377,9 +422,61 @@ function tabularColumnSpecUsesMathMode(columnSpec: string): boolean {
     return groups.before.some(group => /XSNAP:math:\d+Y/.test(group));
 }
 
-function renderLatexTableInlineContent(content: string, renderer: RenderContext): string {
+function splitLatexLineBreaks(content: string): string[] {
+    const lines: string[] = [];
+    let current = '';
+    let depth = 0;
+
+    for (let i = 0; i < content.length; i++) {
+        const char = content[i];
+        if (char === '\\') {
+            if (content[i + 1] === '\\' && depth === 0) {
+                lines.push(current.trim());
+                current = '';
+                i++;
+                continue;
+            }
+            current += char;
+            if (i + 1 < content.length) {
+                current += content[++i];
+            }
+            continue;
+        }
+
+        if (char === '{') {
+            depth++;
+        } else if (char === '}') {
+            depth = Math.max(0, depth - 1);
+        }
+        current += char;
+    }
+
+    lines.push(current.trim());
+    return lines.filter(line => line.length > 0);
+}
+
+function renderMakecell(content: string, renderer: RenderContext): string {
+    return replaceLatexCommand(content, 'makecell', 1, call => {
+        const lines = splitLatexLineBreaks(call.groups[0].content);
+        const lineHtml = lines.map(line => {
+            return `<span class="latex-makecell-line">${renderLatexTableInlineContent(line, renderer)}</span>`;
+        }).join('');
+        return renderer.protectHtml('makecell', `<span class="latex-makecell">${lineHtml}</span>`);
+    });
+}
+
+function renderTnoteMarkers(content: string, renderer: RenderContext): string {
+    return replaceLatexCommand(content, 'tnote', 1, call => {
+        const markerHtml = renderLatexTableInlineContent(call.groups[0].content, renderer);
+        return renderer.protectHtml('tnote', `<sup class="latex-tnote">${markerHtml}</sup>`);
+    });
+}
+
+export function renderLatexTableInlineContent(content: string, renderer: RenderContext): string {
     const withNestedTables = renderNestedTabulars(cleanLatexTableCell(content), renderer);
-    const withMath = withNestedTables.replace(/\$((?:\\.|[^\\$])+?)\$/g, (_match: string, tex: string) => {
+    const withMakecells = renderMakecell(withNestedTables, renderer);
+    const withTableNotes = renderTnoteMarkers(withMakecells, renderer);
+    const withMath = withTableNotes.replace(/\$((?:\\.|[^\\$])+?)\$/g, (_match: string, tex: string) => {
         return renderMath(tex.trim(), false, renderer);
     });
     const withSpaces = withMath.replace(/~/g, () => renderer.protectHtml('space', '&nbsp;'));
