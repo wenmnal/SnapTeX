@@ -391,6 +391,28 @@ body.vscode-dark .tikz-container svg [fill="rgb(0, 0, 0)"] {
     text-align: right;
 }
 
+.latex-table .latex-nested-tabular {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 0.12em;
+    min-width: max-content;
+    vertical-align: middle;
+}
+
+.latex-table .latex-nested-tabular-row {
+    display: flex;
+    align-items: baseline;
+}
+
+.latex-table .latex-nested-tabular-cell {
+    display: inline-block;
+    white-space: nowrap;
+}
+
+.latex-table .latex-nested-tabular-math {
+    align-items: flex-start;
+}
+
 .latex-table .latex-tablenotes {
     max-width: min(100%, 52rem);
     margin: 0.45em auto 0;

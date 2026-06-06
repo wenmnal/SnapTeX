@@ -327,6 +327,67 @@ suite('SmartRenderer', () => {
         assert.doesNotMatch(html, /border: 1px solid/);
     });
 
+    test('renders tabular star tables with nested tabular cells', () => {
+        const html = renderBlocks([
+            [
+                '\\begin{table}[!ht]',
+                '\\setlength\\tabcolsep{0pt}',
+                '\\begin{threeparttable}',
+                '\\caption{Terms contributing to the bias for a given homogeneous segment $I$.}',
+                '\\label{tab:bias}',
+                '\\centering',
+                '\\begin{tabular*}{\\textwidth}{c@{\\extracolsep{\\fill}}*{4}{c}}',
+                '\\toprule',
+                'Loss & Model & $\\mathsf{Cross}$ & $\\mathsf{Squared}$ \\\\',
+                '\\midrule',
+                'In-sample & $\\hf_I^\\mathsf{lasso}(\\lambda^\\circ)$ & $\\mathcal{O}_p(s_n\\log p)$ & $\\mathcal{O}_p(s_n\\log p)$ \\\\',
+                '\\\\',
+                'In-sample & $\\hf_I^\\mathsf{lasso}(\\hlam_I^{\\cv})$ & \\begin{tabular}{@{}>{$}l<{$}}',
+                '\\mathcal{O}_p(\\|u_I^\\top X_I\\|_\\infty \\cdot \\sqrt{s_n})\\\\',
+                '~~~~~~=\\mathcal{O}_p(\\sqrt{\\size{I}\\log p})\\\\',
+                '~~~~~~=\\mathcal{O}_p(s_n\\log^{3/2}p)',
+                '\\end{tabular} & $\\mathcal{O}_p(s_n\\log^2 p)$ \\\\',
+                '\\\\',
+                'Out-of-sample & $\\hf_{J_{-m, I}}^\\mathsf{lasso}(\\hlam_{J_{-m, I}}^{\\cv})$ & $\\mathcal{O}_p(\\sqrt{s_n\\log^2 p})$ & $\\mathcal{O}_p(s_n\\log^2 p)$ \\\\',
+                '\\bottomrule',
+                '\\end{tabular*}',
+                '\\end{threeparttable}',
+                '\\end{table}'
+            ].join('\n')
+        ]);
+
+        assert.match(html, /id="tab:bias"/);
+        assert.match(html, /<table class="latex-tabular-preview latex-tabular-booktabs">/);
+        assert.match(html, /class="latex-nested-tabular latex-nested-tabular-math"/);
+        assert.match(html, /Out-of-sample/);
+        const tbodyHtml = /<tbody>([\s\S]*?)<\/tbody>/.exec(html)?.[1] ?? '';
+        assert.equal(tbodyHtml.match(/<tr/g)?.length, 3);
+        assert.doesNotMatch(html, /\\begin\{threeparttable\}|\\begin\{tabular\*\}|\\setlength\\tabcolsep/);
+        assert.doesNotMatch(html, /<tr><td>\s*<\/td><\/tr>/);
+    });
+
+    test('renders multicolumn and multirow table cells', () => {
+        const html = renderBlocks([
+            [
+                '\\begin{table}',
+                '\\caption{Grouped table}',
+                '\\begin{tabular}{lll}',
+                '\\toprule',
+                '\\multicolumn{2}{c}{\\textbf{Group}} & \\textbf{Total} \\\\',
+                '\\midrule',
+                '\\multirow{2}{*}{A} & x & 1 \\\\',
+                ' & y & 2 \\\\',
+                '\\bottomrule',
+                '\\end{tabular}',
+                '\\end{table}'
+            ].join('\n')
+        ]);
+
+        assert.match(html, /<th scope="col" colspan="2" class="table-cell-align-center"><strong>Group<\/strong><\/th>/);
+        assert.match(html, /<td rowspan="2">A<\/td><td>x<\/td><td>1<\/td>/);
+        assert.doesNotMatch(html, /\\multicolumn|\\multirow/);
+    });
+
     test('removes standalone comment lines without creating blank preview gaps', () => {
         const html = renderBlocks([
             [

@@ -1,6 +1,7 @@
 import { PreprocessRule, RenderContext } from './types';
-import { escapeHtmlAttribute, extractAndHideLabels, findBalancedClosingBrace, findCommand, resolveLatexStyles } from './utils';
+import { escapeHtmlAttribute, extractAndHideLabels, findCommand, resolveLatexStyles } from './utils';
 import { recoverPreservedTokens, renderCaptionContent, renderMath, unwrapResizeboxAroundProtectedContent } from './rule-helpers';
+import { findFirstTabularEnvironment, renderLatexTabular } from './latex-table';
 
 /**
  * Converts LaTeX figure environments to protected HTML, preserving captions,
@@ -120,199 +121,6 @@ export function createAlgorithmRule(): PreprocessRule {
     };
 }
 
-type TableRuleKind = 'top' | 'mid' | 'bottom' | 'hline';
-
-interface LatexTableRow {
-    cells: string[];
-    rulesBefore: TableRuleKind[];
-}
-
-interface LatexTableModel {
-    rows: LatexTableRow[];
-    hasBooktabs: boolean;
-    hasRules: boolean;
-}
-
-interface LatexGroup {
-    content: string;
-    end: number;
-}
-
-const TABLE_ROW_OR_RULE_REGEX = /\\toprule(?:\[.*?\])?|\\midrule(?:\[.*?\])?|\\bottomrule(?:\[.*?\])?|\\cmidrule(?:\[.*?\])?(?:\(.*?\))?\{[^}]+\}|\\hline|\\\\(?:\[.*?\])?/g;
-
-function readLatexGroup(text: string, startIndex: number): LatexGroup | undefined {
-    let index = startIndex;
-    while (index < text.length && /\s/.test(text[index])) { index++; }
-    if (text[index] !== '{') { return undefined; }
-
-    const closeIndex = findBalancedClosingBrace(text, index);
-    if (closeIndex === -1) { return undefined; }
-
-    return {
-        content: text.substring(index + 1, closeIndex),
-        end: closeIndex + 1
-    };
-}
-
-function classifyTableRule(token: string): TableRuleKind | undefined {
-    if (token.startsWith('\\toprule')) { return 'top'; }
-    if (token.startsWith('\\midrule') || token.startsWith('\\cmidrule')) { return 'mid'; }
-    if (token.startsWith('\\bottomrule')) { return 'bottom'; }
-    if (token.startsWith('\\hline')) { return 'hline'; }
-    return undefined;
-}
-
-function splitLatexTableCells(rowText: string): string[] {
-    const cells: string[] = [];
-    let cell = '';
-    let depth = 0;
-
-    for (let i = 0; i < rowText.length; i++) {
-        const char = rowText[i];
-        if (char === '\\') {
-            cell += char;
-            if (i + 1 < rowText.length) {
-                cell += rowText[++i];
-            }
-            continue;
-        }
-        if (char === '{') {
-            depth++;
-        } else if (char === '}') {
-            depth = Math.max(0, depth - 1);
-        }
-
-        if (char === '&' && depth === 0) {
-            cells.push(cell.trim());
-            cell = '';
-        } else {
-            cell += char;
-        }
-    }
-
-    cells.push(cell.trim());
-    return cells;
-}
-
-function parseLatexTableRows(rawContent: string): LatexTableModel {
-    const rows: LatexTableRow[] = [];
-    const pendingRules: TableRuleKind[] = [];
-    let hasBooktabs = false;
-    let hasRules = false;
-    let current = '';
-    let cursor = 0;
-
-    const pushRow = () => {
-        const trimmed = current.trim();
-        if (trimmed) {
-            rows.push({
-                cells: splitLatexTableCells(trimmed),
-                rulesBefore: pendingRules.splice(0)
-            });
-        } else {
-            pendingRules.splice(0);
-        }
-        current = '';
-    };
-
-    TABLE_ROW_OR_RULE_REGEX.lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = TABLE_ROW_OR_RULE_REGEX.exec(rawContent)) !== null) {
-        current += rawContent.substring(cursor, match.index);
-        cursor = match.index + match[0].length;
-
-        if (match[0].startsWith('\\\\')) {
-            pushRow();
-            continue;
-        }
-
-        if (current.trim()) {
-            pushRow();
-        }
-
-        const rule = classifyTableRule(match[0]);
-        if (rule) {
-            hasRules = true;
-            hasBooktabs ||= rule === 'top' || rule === 'mid' || rule === 'bottom';
-            pendingRules.push(rule);
-        }
-    }
-
-    current += rawContent.substring(cursor);
-    if (current.trim()) {
-        pushRow();
-    }
-
-    return { rows, hasBooktabs, hasRules };
-}
-
-function cleanLatexTableCell(text: string): string {
-    return text
-        .replace(/\\(?:centering|raggedright|raggedleft|arraybackslash)\b/g, '')
-        .replace(/\\(?:small|footnotesize|scriptsize|tiny|normalsize)\b/g, '')
-        .trim();
-}
-
-function stripLatexGroupingBraces(text: string): string {
-    return text.replace(/\{([^{}]*)\}/g, '$1');
-}
-
-function renderLatexTableCell(cellText: string, renderer: RenderContext, tagName: 'td' | 'th'): string {
-    let content = cellText.trim();
-    const attrs: string[] = [];
-
-    if (content.startsWith('\\multicolumn')) {
-        const countGroup = readLatexGroup(content, '\\multicolumn'.length);
-        const alignGroup = countGroup ? readLatexGroup(content, countGroup.end) : undefined;
-        const contentGroup = alignGroup ? readLatexGroup(content, alignGroup.end) : undefined;
-        const colspan = countGroup ? Number.parseInt(countGroup.content, 10) : NaN;
-
-        if (contentGroup) {
-            content = contentGroup.content;
-            if (Number.isFinite(colspan) && colspan > 1) {
-                attrs.push(`colspan="${colspan}"`);
-            }
-            if (alignGroup) {
-                const align = alignGroup.content.includes('r') ? 'right' : alignGroup.content.includes('c') ? 'center' : 'left';
-                attrs.push(`class="table-cell-align-${align}"`);
-            }
-        }
-    }
-
-    if (tagName === 'th') {
-        attrs.unshift('scope="col"');
-    }
-
-    const styledContent = resolveLatexStyles(cleanLatexTableCell(content), html => renderer.protectHtml('style', html));
-    const htmlContent = renderer.renderInline(stripLatexGroupingBraces(styledContent));
-    const attrText = attrs.length > 0 ? ` ${attrs.join(' ')}` : '';
-    return `<${tagName}${attrText}>${htmlContent}</${tagName}>`;
-}
-
-function renderLatexTableRows(rows: LatexTableRow[], renderer: RenderContext, tagName: 'td' | 'th', suppressFirstRule: boolean): string {
-    return rows.map((row, rowIndex) => {
-        const hasRuleAbove = row.rulesBefore.some(rule => rule === 'mid' || rule === 'hline') && !(suppressFirstRule && rowIndex === 0);
-        const classAttr = hasRuleAbove ? ' class="table-row-rule-above"' : '';
-        const cells = row.cells.map(cell => renderLatexTableCell(cell, renderer, tagName)).join('');
-        return `<tr${classAttr}>${cells}</tr>`;
-    }).join('');
-}
-
-function renderLatexTable(rawContent: string, renderer: RenderContext): string {
-    const model = parseLatexTableRows(rawContent);
-    if (model.rows.length === 0) { return ''; }
-
-    const firstBodyRowIndex = model.rows.findIndex((row, index) => index > 0 && row.rulesBefore.some(rule => rule === 'mid' || rule === 'hline'));
-    const hasHeader = firstBodyRowIndex > 0;
-    const headerRows = hasHeader ? model.rows.slice(0, firstBodyRowIndex) : [];
-    const bodyRows = hasHeader ? model.rows.slice(firstBodyRowIndex) : model.rows;
-    const classNames = ['latex-tabular-preview', model.hasBooktabs ? 'latex-tabular-booktabs' : model.hasRules ? 'latex-tabular-ruled' : ''];
-
-    const theadHtml = hasHeader ? `<thead>${renderLatexTableRows(headerRows, renderer, 'th', true)}</thead>` : '';
-    const tbodyHtml = `<tbody>${renderLatexTableRows(bodyRows, renderer, 'td', hasHeader)}</tbody>`;
-    return `<table class="${classNames.filter(Boolean).join(' ')}">${theadHtml}${tbodyHtml}</table>`;
-}
-
 /**
  * Converts common table/tabular forms into preview HTML tables.
  */
@@ -352,57 +160,13 @@ export function createTableRule(): PreprocessRule {
                 }
 
                 let tableHtml = '';
-                const beginRegex = /\\begin\{(tabular\*?|tabularx)\}/g;
-                const beginMatch = beginRegex.exec(innerContent);
                 let tabularRegion = { start: 0, end: 0 };
+                const tabular = findFirstTabularEnvironment(innerContent);
 
-                if (beginMatch) {
-                    const envName = beginMatch[1];
-                    let contentStartIndex = beginMatch.index + beginMatch[0].length;
-                    const requiredArgs = envName === 'tabular' ? 1 : 2;
-                    let argsFound = 0;
-                    while (argsFound < requiredArgs) {
-                        while (contentStartIndex < innerContent.length && /\s/.test(innerContent[contentStartIndex])) { contentStartIndex++; }
-                        if (contentStartIndex >= innerContent.length) { break; }
-                        if (innerContent[contentStartIndex] === '[') {
-                            const closeBracket = innerContent.indexOf(']', contentStartIndex);
-                            if (closeBracket !== -1) {
-                                contentStartIndex = closeBracket + 1;
-                                continue;
-                            }
-                        }
-                        if (innerContent[contentStartIndex] === '{') {
-                            const closeBrace = findBalancedClosingBrace(innerContent, contentStartIndex);
-                            if (closeBrace !== -1) {
-                                contentStartIndex = closeBrace + 1;
-                                argsFound++;
-                            } else {
-                                break;
-                            }
-                        } else {
-                            break;
-                        }
-                    }
-
-                    const escapedEnvName = envName.replace(/\*/g, '\\*');
-                    const endRegex = new RegExp(`\\\\end\\{${escapedEnvName}\\}`, 'g');
-                    endRegex.lastIndex = contentStartIndex;
-                    const endMatch = endRegex.exec(innerContent);
-
-                    if (endMatch) {
-                        tabularRegion = { start: beginMatch.index, end: endMatch.index + endMatch[0].length };
-                        let rawContent = innerContent.substring(contentStartIndex, endMatch.index);
-
-                        rawContent = rawContent.replace(/\$((?:\\.|[^\\$])+?)\$/g, (_m: string, c: string) => renderMath(c.trim(), false, renderer));
-                        rawContent = rawContent.replace(/\\(?:centering|raggedright|raggedleft|arraybackslash)\b/g, '');
-                        rawContent = rawContent.replace(/\\(?:small|footnotesize|scriptsize|tiny|normalsize)\b/g, '');
-                        rawContent = rawContent.replace(/\\cline\{[^}]+\}/g, '\\hline');
-                        rawContent = rawContent.replace(/\\addlinespace(?:\[.*?\])?/g, '');
-                        rawContent = rawContent.replace(/\\vspace\*?\{[^}]+\}/g, '');
-                        rawContent = rawContent.replace(/\\setlength\s*\\[a-zA-Z]+\s*\{[^}]+\}/g, '');
-
-                        tableHtml = renderLatexTable(rawContent, renderer);
-                    }
+                if (tabular) {
+                    tabularRegion = { start: tabular.beginStart, end: tabular.end };
+                    const rawContent = innerContent.substring(tabular.bodyStart, tabular.bodyEnd);
+                    tableHtml = renderLatexTabular(rawContent, renderer);
                 }
 
                 const ignoredContent = innerContent.substring(0, tabularRegion.start) + innerContent.substring(tabularRegion.end);
