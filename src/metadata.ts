@@ -1,40 +1,103 @@
 import { MetadataResult } from './types';
-import { findBalancedClosingBrace, findCommand } from './utils';
+import { findCommand, readLatexGroup, skipLatexWhitespace } from './utils';
+
+type MacroDefinitionCommand = 'newcommand' | 'renewcommand' | 'providenewcommand' | 'def' | 'gdef' | 'DeclareMathOperator';
+
+interface MacroDefinitionHeader {
+    command: MacroDefinitionCommand;
+    name: string;
+    star: boolean;
+    argCount: number;
+    hasDefaultArgument: boolean;
+    body: {
+        content: string;
+        start: number;
+    };
+}
+
+function readMacroName(text: string, index: number): { name: string; end: number } | undefined {
+    index = skipLatexWhitespace(text, index);
+
+    const grouped = readLatexGroup(text, index, { delimiter: 'brace', skipWhitespace: false });
+    if (grouped) {
+        const name = grouped.content.trim();
+        return /^\\[a-zA-Z0-9@]+$/.test(name) ? { name, end: grouped.end } : undefined;
+    }
+
+    if (text[index] !== '\\') { return undefined; }
+    let end = index + 1;
+    while (end < text.length && /[a-zA-Z0-9@]/.test(text[end])) { end++; }
+    const name = text.substring(index, end);
+    return /^\\[a-zA-Z0-9@]+$/.test(name) ? { name, end } : undefined;
+}
+
+function readMacroDefinitionHeader(fullDef: string): MacroDefinitionHeader | undefined {
+    const commandMatch = /^\\((?:provide|re)?newcommand|g?def|DeclareMathOperator)(\*)?/.exec(fullDef);
+    if (!commandMatch) { return undefined; }
+
+    const command = commandMatch[1] as MacroDefinitionCommand;
+    const star = commandMatch[2] === '*';
+    const macroName = readMacroName(fullDef, commandMatch[0].length);
+    if (!macroName) { return undefined; }
+
+    let index = macroName.end;
+    let argCount = 0;
+    let hasDefaultArgument = false;
+
+    if (command === 'newcommand' || command === 'renewcommand' || command === 'providenewcommand') {
+        const argCountGroup = readLatexGroup(fullDef, index, { delimiter: 'bracket' });
+        if (argCountGroup && /^\d+$/.test(argCountGroup.content.trim())) {
+            argCount = parseInt(argCountGroup.content.trim(), 10);
+            index = argCountGroup.end;
+
+            const defaultArgGroup = readLatexGroup(fullDef, index, { delimiter: 'bracket' });
+            if (defaultArgGroup) {
+                hasDefaultArgument = true;
+                index = defaultArgGroup.end;
+            }
+        }
+    } else if (command === 'def' || command === 'gdef') {
+        const bodyIndex = fullDef.indexOf('{', index);
+        if (bodyIndex === -1) { return undefined; }
+        index = bodyIndex;
+    }
+
+    const body = readLatexGroup(fullDef, index, { delimiter: 'brace' });
+    if (!body) { return undefined; }
+
+    return {
+        command,
+        name: macroName.name,
+        star,
+        argCount,
+        hasDefaultArgument,
+        body: {
+            content: body.content,
+            start: body.start
+        }
+    };
+}
 
 /**
  * Converts simple \newcommand definitions to \def syntax accepted by TikZJax.
  */
 function transpileToDef(fullDef: string): string {
-    const match = /^\\(?:re|provide)?newcommand\*?\s*(?:\{(\\[a-zA-Z0-9@]+)\}|(\\[a-zA-Z0-9@]+))(?:\s*\[(\d+)\])?/.exec(fullDef);
-    if (!match) {return fullDef;}
+    const header = readMacroDefinitionHeader(fullDef);
+    if (!header || !header.command.endsWith('newcommand') || header.hasDefaultArgument) {return fullDef;}
 
-    const name = match[1] || match[2];
-    const argCount = match[3] ? parseInt(match[3], 10) : 0;
-
-    const headerLength = match[0].length;
-    const remainder = fullDef.substring(headerLength);
-    const bodyStart = remainder.indexOf('{');
-    if (bodyStart === -1) {return fullDef;}
-
-    const preBody = remainder.substring(0, bodyStart).trim();
-    if (preBody.startsWith('[')) {return fullDef;}
-
-    const body = remainder.substring(bodyStart);
     let args = "";
-    for(let i=1; i<=argCount; i++) {args += `#${i}`;}
+    for(let i=1; i<=header.argCount; i++) {args += `#${i}`;}
 
-    return `\\def${name}${args}${body}`;
+    return `\\def${header.name}${args}${fullDef.substring(header.body.start)}`;
 }
 
 /**
  * Extracts the command name from a macro definition string.
  */
 function extractMacroName(def: string): string | null {
-    const match = /\\(?:def\s*(\\[a-zA-Z0-9@]+)|(?:re|provide)?newcommand\*?\s*(?:\{(\\[a-zA-Z0-9@]+)\}|(\\[a-zA-Z0-9@]+)))/.exec(def);
-    if (match) {
-        return match[1] || match[2] || match[3];
-    }
-    return null;
+    const header = readMacroDefinitionHeader(def);
+    if (!header || header.command === 'DeclareMathOperator') { return null; }
+    return header.name;
 }
 
 interface TextRange {
@@ -44,30 +107,6 @@ interface TextRange {
 
 interface DefinitionRecord extends TextRange {
     fullDef: string;
-}
-
-function skipWhitespace(text: string, index: number): number {
-    let i = index;
-    while (i < text.length && /\s/.test(text[i])) { i++; }
-    return i;
-}
-
-function findClosingBracket(text: string, startIndex: number): number {
-    let depth = 0;
-    for (let i = startIndex; i < text.length; i++) {
-        const char = text[i];
-        if (char === '\\') {
-            i++;
-            continue;
-        }
-        if (char === '[') {
-            depth++;
-        } else if (char === ']') {
-            depth--;
-            if (depth === 0) { return i; }
-        }
-    }
-    return -1;
 }
 
 function consumeControlSequence(text: string, index: number): number {
@@ -83,21 +122,21 @@ function findDefinitionEnd(text: string, tokenEndIndex: number): number {
 
     while (i < text.length) {
         const beforeWhitespace = i;
-        i = skipWhitespace(text, i);
+        i = skipLatexWhitespace(text, i);
         const char = text[i];
 
         if (char === '[') {
-            const close = findClosingBracket(text, i);
-            if (close === -1) { return -1; }
-            i = close + 1;
+            const group = readLatexGroup(text, i, { delimiter: 'bracket', skipWhitespace: false });
+            if (!group) { return -1; }
+            i = group.end;
             continue;
         }
 
         if (char === '{') {
-            const close = findBalancedClosingBrace(text, i);
-            if (close === -1) { return -1; }
+            const group = readLatexGroup(text, i, { delimiter: 'brace', skipWhitespace: false });
+            if (!group) { return -1; }
             consumedGroup = true;
-            i = close + 1;
+            i = group.end;
             continue;
         }
 
@@ -154,24 +193,15 @@ function collectDefinitions(text: string): DefinitionRecord[] {
 }
 
 function extractKatexMacro(fullDef: string): { name: string; definition: string } | undefined {
-    const match = /\\(newcommand|renewcommand|def|gdef|DeclareMathOperator)(\*?)\s*\{?(\\[a-zA-Z0-9]+)\}?(?:\[(\d+)\])?/.exec(fullDef);
-    if (!match) { return undefined; }
+    const header = readMacroDefinitionHeader(fullDef);
+    if (!header || header.command === 'providenewcommand') { return undefined; }
 
-    const cmdType = match[1];
-    const star = match[2];
-    const name = match[3];
-    const bodyStart = fullDef.indexOf('{', match.index + match[0].length);
-    if (bodyStart === -1) { return undefined; }
-
-    const bodyEnd = findBalancedClosingBrace(fullDef, bodyStart);
-    if (bodyEnd === -1) { return undefined; }
-
-    const rawDefinition = fullDef.substring(bodyStart + 1, bodyEnd).trim();
-    const definition = cmdType === 'DeclareMathOperator'
-        ? (star === '*' ? `\\operatorname*{${rawDefinition}}` : `\\operatorname{${rawDefinition}}`)
+    const rawDefinition = header.body.content.trim();
+    const definition = header.command === 'DeclareMathOperator'
+        ? (header.star ? `\\operatorname*{${rawDefinition}}` : `\\operatorname{${rawDefinition}}`)
         : rawDefinition;
 
-    return { name, definition };
+    return { name: header.name, definition };
 }
 
 /**
@@ -195,19 +225,19 @@ export function extractMetadata(text: string): MetadataResult {
     const titleRes = findCommand(cleanedText, 'title');
     if (titleRes) {
         title = titleRes.content.replace(/\\\\/g, '<br/>');
-        cleanedText = cleanedText.substring(0, titleRes.start) + cleanedText.substring(titleRes.end + 1);
+        cleanedText = cleanedText.substring(0, titleRes.start) + cleanedText.substring(titleRes.end);
     }
 
     const authorRes = findCommand(cleanedText, 'author');
     if (authorRes) {
         author = authorRes.content;
-        cleanedText = cleanedText.substring(0, authorRes.start) + cleanedText.substring(authorRes.end + 1);
+        cleanedText = cleanedText.substring(0, authorRes.start) + cleanedText.substring(authorRes.end);
     }
 
     const dateRes = findCommand(cleanedText, 'date');
     if (dateRes) {
         date = dateRes.content;
-        cleanedText = cleanedText.substring(0, dateRes.start) + cleanedText.substring(dateRes.end + 1);
+        cleanedText = cleanedText.substring(0, dateRes.start) + cleanedText.substring(dateRes.end);
     }
 
     const tikzGlobalParts: string[] = [];

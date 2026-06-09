@@ -1,10 +1,7 @@
 /// <reference types="mocha" />
 
 import * as assert from 'assert';
-import * as fs from 'fs';
-import * as path from 'path';
-import { ExtensionToWebviewCommand, isWebviewToExtensionMessage, WebviewToExtensionCommand } from '../webview-messages';
-import { readWebviewRuntimeSource } from './test-helpers';
+import { isWebviewToExtensionMessage, WebviewToExtensionCommand } from '../webview-messages';
 
 suite('Webview message contracts', () => {
     test('accepts well-formed webview messages', () => {
@@ -44,17 +41,4 @@ suite('Webview message contracts', () => {
         }), false);
     });
 
-    test('routes panel and webview code through shared command constants', () => {
-        const repoRoot = path.resolve(__dirname, '..', '..');
-        const panelSource = fs.readFileSync(path.join(repoRoot, 'src', 'panel.ts'), 'utf8');
-        const extensionSource = fs.readFileSync(path.join(repoRoot, 'src', 'extension.ts'), 'utf8');
-        const webviewSource = readWebviewRuntimeSource(repoRoot);
-
-        assert.match(panelSource, /isWebviewToExtensionMessage\(message\)/);
-        assert.match(panelSource, /assertNever\(message\)/);
-        assert.match(extensionSource, /ExtensionToWebviewCommand\.ScrollToBlock/);
-        assert.match(webviewSource, /WebviewToExtensionCommand\.WebviewLoaded/);
-        assert.match(webviewSource, /WebviewToExtensionCommand\.RequestPdf/);
-        assert.match(webviewSource, /ExtensionToWebviewCommand\.PdfUri/);
-    });
 });

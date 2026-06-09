@@ -16,14 +16,13 @@ export const WebviewToExtensionCommand = {
 
 export const ExtensionToWebviewCommand = {
     Update: 'update',
-    UpdateBinary: 'update_binary',
     ScrollToBlock: 'scrollToBlock',
     PdfUri: 'pdfUri',
     BlockHtml: 'blockHtml',
     Config: 'config'
 } as const;
 
-export interface WebviewLoadedMessage {
+interface WebviewLoadedMessage {
     command: typeof WebviewToExtensionCommand.WebviewLoaded;
 }
 
@@ -35,7 +34,7 @@ export interface RevealLineMessage {
     viewRatio?: number;
 }
 
-export interface SyncScrollMessage {
+interface SyncScrollMessage {
     command: typeof WebviewToExtensionCommand.SyncScroll;
     index: number;
     ratio: number;
@@ -54,25 +53,19 @@ export interface RequestBlockHtmlMessage {
     hash: string;
 }
 
-export type WebviewToExtensionMessage =
+type WebviewToExtensionMessage =
     | WebviewLoadedMessage
     | RevealLineMessage
     | SyncScrollMessage
     | RequestPdfMessage
     | RequestBlockHtmlMessage;
 
-export interface UpdateMessage {
+interface UpdateMessage {
     command: typeof ExtensionToWebviewCommand.Update;
     payload: PatchPayload;
 }
 
-export interface UpdateBinaryMessage {
-    command: typeof ExtensionToWebviewCommand.UpdateBinary;
-    payload: PatchPayload;
-    binaryData: Uint8Array | { type: 'Buffer'; data: number[] } | ArrayBuffer | number[];
-}
-
-export interface ScrollToBlockMessage {
+interface ScrollToBlockMessage {
     command: typeof ExtensionToWebviewCommand.ScrollToBlock;
     index: number;
     ratio: number;
@@ -81,7 +74,7 @@ export interface ScrollToBlockMessage {
     viewRatio?: number;
 }
 
-export interface PdfUriMessage {
+interface PdfUriMessage {
     command: typeof ExtensionToWebviewCommand.PdfUri;
     id: string;
     uri?: string;
@@ -89,7 +82,7 @@ export interface PdfUriMessage {
     error?: string;
 }
 
-export interface BlockHtmlMessage {
+interface BlockHtmlMessage {
     command: typeof ExtensionToWebviewCommand.BlockHtml;
     id: string;
     index: number;
@@ -98,7 +91,7 @@ export interface BlockHtmlMessage {
     error?: string;
 }
 
-export interface ConfigMessage {
+interface ConfigMessage {
     command: typeof ExtensionToWebviewCommand.Config;
     config: {
         autoScrollDelay: number;
@@ -109,7 +102,6 @@ export interface ConfigMessage {
 
 export type ExtensionToWebviewMessage =
     | UpdateMessage
-    | UpdateBinaryMessage
     | ScrollToBlockMessage
     | PdfUriMessage
     | BlockHtmlMessage

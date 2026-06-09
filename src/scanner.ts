@@ -1,19 +1,13 @@
+import { DiffEngine } from './diff';
 import { REGEX_STR } from './patterns';
-import { stableHash } from './utils';
+import { BlockNumberingCounts } from './types';
+import { extractLatexLabelNames, stableHash } from './utils';
 
-export interface BlockNumbering {
-    seq: number;
-    counts: {
-        eq: string[];
-        fig: string[];
-        tbl: string[];
-        alg: string[];
-        sec: string[];
-        thm: string[];
-    };
+interface BlockNumbering {
+    counts: BlockNumberingCounts;
 }
 
-export interface ScanResult {
+interface ScanResult {
     blockNumbering: BlockNumbering[];
     labelMap: Record<string, string>;
 }
@@ -86,29 +80,22 @@ export class LatexCounterScanner {
         }
 
         const previous = this.summaries;
+        const currentHashes = hashes.map(hash => ({ hash }));
+        const diff = DiffEngine.compute(previous, currentHashes);
         const next: BlockScanSummary[] = new Array(count);
+        const changedEnd = diff.start + diff.insertCount;
+        const suffixOffset = diff.deleteCount - diff.insertCount;
 
-        let start = 0;
-        const minLen = Math.min(previous.length, count);
-        while (start < minLen && previous[start].hash === hashes[start]) {
-            next[start] = previous[start];
-            start++;
+        for (let index = 0; index < diff.start; index++) {
+            next[index] = previous[index];
         }
 
-        let end = 0;
-        const maxEnd = Math.min(previous.length - start, count - start);
-        while (end < maxEnd) {
-            const oldIndex = previous.length - 1 - end;
-            const newIndex = count - 1 - end;
-            if (previous[oldIndex].hash !== hashes[newIndex]) {
-                break;
-            }
-            next[newIndex] = previous[oldIndex];
-            end++;
-        }
-
-        for (let index = start; index < count - end; index++) {
+        for (let index = diff.start; index < changedEnd; index++) {
             next[index] = this.parseBlock(getText(index), hashes[index]);
+        }
+
+        for (let index = changedEnd; index < count; index++) {
+            next[index] = previous[index + suffixOffset];
         }
 
         this.summaries = next;
@@ -177,9 +164,8 @@ export class LatexCounterScanner {
         const labelMap: Record<string, string> = {};
         const results: BlockNumbering[] = [];
 
-        summaries.forEach((summary, index) => {
+        summaries.forEach(summary => {
             const blockRes: BlockNumbering = {
-                seq: index,
                 counts: { eq: [], fig: [], tbl: [], alg: [], sec: [], thm: [] }
             };
 
@@ -235,8 +221,7 @@ export class LatexCounterScanner {
 
     private extractLabelNear(text: string, startIdx: number): string | undefined {
         const sub = text.substring(startIdx, startIdx + 200);
-        const match = sub.match(/\\label\s*\{([^}]+)\}/);
-        return match?.[1];
+        return extractLatexLabelNames(sub)[0];
     }
 
     private extractEnvInfo(text: string, startIdx: number, envName: string): { label?: string; tag?: string } {
@@ -245,7 +230,7 @@ export class LatexCounterScanner {
         const endMatch = sub.match(endRegex);
         const limit = endMatch ? (endMatch.index! + endMatch[0].length) : sub.length;
         const block = sub.substring(0, limit);
-        const label = block.match(/\\label\s*\{([^}]+)\}/)?.[1];
+        const label = extractLatexLabelNames(block)[0];
         const tag = block.match(/\\tag\*?\s*\{([^}]+)\}/)?.[1];
         return { label, tag };
     }

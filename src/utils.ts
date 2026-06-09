@@ -3,16 +3,13 @@
  */
 
 import * as vscode from 'vscode';
+import { R_CITATION } from './patterns';
 import type { RenderContext } from './types';
-
-export function capitalizeFirstLetter(string: string): string {
-    return string.charAt(0).toUpperCase() + string.slice(1);
-}
 
 /**
  * Decodes common LaTeX accents to Unicode for citation and bibliography text.
  */
-export function decodeLatexAccents(text: string): string {
+function decodeLatexAccents(text: string): string {
     const accents: Record<string, string> = {
         '\\"a': 'ä', '\\"o': 'ö', '\\"u': 'ü', '\\"A': 'Ä', '\\"O': 'Ö', '\\"U': 'Ü',
         "\\'a": 'á', "\\'e": 'é', "\\'i": 'í', "\\'o": 'ó', "\\'u": 'ú', "\\'y": 'ý', "\\'c": 'ć',
@@ -85,11 +82,13 @@ export function createHiddenLabelAnchor(labelName: string): string {
     return `<span id="${safeLabel}" class="latex-label-anchor" data-label="${safeLabel}" style="visibility:hidden; position:relative; top:-50px;"></span>`;
 }
 
+const LATEX_LABEL_PATTERN = /\\label\s*\{([^}]+)\}/g;
+
 /**
  * Applies a small subset of LaTeX text styling commands to protected HTML.
  */
 export function resolveLatexStyles(text: string, protectHtml?: (html: string) => string): string {
-    text = text.replace(/\\(textbf|textit|emph|texttt|textsf|textrm|underline)\{((?:[^{}]|{[^{}]*})*)\}/g, (match, cmd, content) => {
+    text = text.replace(/\\(textbf|textit|emph|texttt|textsf|textrm|underline)\{((?:[^{}]|{[^{}]*})*)\}/g, (_match, cmd, content) => {
         let startTag = '', endTag = '';
         switch (cmd) {
             case 'textbf': startTag = '<strong>'; endTag = '</strong>'; break;
@@ -104,7 +103,7 @@ export function resolveLatexStyles(text: string, protectHtml?: (html: string) =>
         return applyStyleToTexList(startTag, endTag, content, protectHtml);
     });
 
-    text = text.replace(/\{\\(bf|it|sf|rm|tt)\s+((?:[^{}]|{[^{}]*})*)\}/g, (match, cmd, content) => {
+    text = text.replace(/\{\\(bf|it|sf|rm|tt)\s+((?:[^{}]|{[^{}]*})*)\}/g, (_match, cmd, content) => {
         let startTag = '', endTag = '';
         switch (cmd) {
             case 'bf': startTag = '<strong>'; endTag = '</strong>'; break;
@@ -116,15 +115,12 @@ export function resolveLatexStyles(text: string, protectHtml?: (html: string) =>
         return applyStyleToTexList(startTag, endTag, content, protectHtml);
     });
 
-    text = text.replace(/\{\\color\{([a-zA-Z0-9]+)\}\s*((?:[^{}]|{[^{}]*})*)\}/g, (match, color, content) => {
+    const applyColorStyle = (_match: string, color: string, content: string) => {
         return applyStyleToTexList(`<span style="color: ${color}">`, '</span>', content, protectHtml);
-    });
-    text = text.replace(/\\color\{([a-zA-Z]+)\}\{([^}]*)\}/g, (match, color, content) => {
-        return applyStyleToTexList(`<span style="color: ${color}">`, '</span>', content, protectHtml);
-    });
-    text = text.replace(/\\textcolor\{([a-zA-Z0-9]+)\}\{((?:[^{}]|{[^{}]*})*)\}/g, (match, color, content) => {
-        return applyStyleToTexList(`<span style="color: ${color}">`, '</span>', content, protectHtml);
-    });
+    };
+    text = text.replace(/\{\\color\{([a-zA-Z0-9]+)\}\s*((?:[^{}]|{[^{}]*})*)\}/g, applyColorStyle);
+    text = text.replace(/\\color\{([a-zA-Z]+)\}\{([^}]*)\}/g, applyColorStyle);
+    text = text.replace(/\\textcolor\{([a-zA-Z0-9]+)\}\{((?:[^{}]|{[^{}]*})*)\}/g, applyColorStyle);
 
     return text;
 }
@@ -134,19 +130,244 @@ export function resolveLatexStyles(text: string, protectHtml?: (html: string) =>
  */
 export function extractAndHideLabels(content: string) {
     const labels: string[] = [];
-    const cleanContent = content.replace(/\\label\s*\{([^}]+)\}/g, (match, labelName) => {
+    LATEX_LABEL_PATTERN.lastIndex = 0;
+    const cleanContent = content.replace(LATEX_LABEL_PATTERN, (_match, labelName) => {
         labels.push(createHiddenLabelAnchor(labelName));
         return '';
     });
     return { cleanContent, hiddenHtml: labels.join('') };
 }
 
+export function extractLatexLabelNames(content: string): string[] {
+    const labels: string[] = [];
+    LATEX_LABEL_PATTERN.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = LATEX_LABEL_PATTERN.exec(content)) !== null) {
+        labels.push(match[1]);
+    }
+    return labels;
+}
+
+export function splitLatexCitationKeys(rawKeys: string): string[] {
+    return rawKeys.split(',').map(key => key.trim());
+}
+
+export function extractLatexCitationKeys(content: string): string[] {
+    const keys = new Set<string>();
+    R_CITATION.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = R_CITATION.exec(content)) !== null) {
+        splitLatexCitationKeys(match[4]).forEach(key => keys.add(key));
+    }
+    return Array.from(keys);
+}
+
 /**
- * Finds the matching closing brace for a balanced LaTeX-style group.
+ * Lightweight LaTeX structure readers shared by rule modules.
  */
-export function findBalancedClosingBrace(text: string, startIndex: number): number {
-    let depth = 0;
-    for (let i = startIndex; i < text.length; i++) {
+type LatexGroupDelimiter = 'brace' | 'bracket';
+type LatexCommentScanMode = 'ignore' | 'stop' | 'skip-line';
+
+export interface LatexGroup {
+    content: string;
+    start: number;
+    end: number;
+    contentStart: number;
+    contentEnd: number;
+    open: '{' | '[';
+    close: '}' | ']';
+}
+
+interface LatexCommandCall {
+    name: string;
+    start: number;
+    end: number;
+    commandEnd: number;
+    star: boolean;
+    optionalArgs: LatexGroup[];
+    requiredArgs: LatexGroup[];
+}
+
+interface LatexGroupReadOptions {
+    delimiter?: LatexGroupDelimiter;
+    skipWhitespace?: boolean;
+}
+
+interface LatexCommandReadOptions {
+    name: string;
+    requiredArgs?: number;
+    optionalArgs?: number;
+    allowStar?: boolean;
+    skipWhitespace?: boolean;
+}
+
+interface LatexCommandReplacementRule extends Omit<LatexCommandReadOptions, 'name' | 'skipWhitespace'> {
+    name: string;
+    render(call: LatexCommandCall): string;
+}
+
+interface LatexBraceScanOptions {
+    start?: number;
+    initialDepth?: number;
+    limitChars?: number;
+    stopWhenClosed?: boolean;
+    commentMode?: LatexCommentScanMode;
+}
+
+interface LatexBraceScanResult {
+    depth: number;
+    closedAt?: number;
+}
+
+/**
+ * Advances across whitespace before a lightweight LaTeX token read.
+ */
+export function skipLatexWhitespace(text: string, index: number): number {
+    while (index < text.length && /\s/.test(text[index])) { index++; }
+    return index;
+}
+
+/**
+ * Reads one balanced LaTeX group, returning offsets for both delimiters and content.
+ */
+export function readLatexGroup(text: string, startIndex: number, options: LatexGroupReadOptions = {}): LatexGroup | undefined {
+    const delimiter = options.delimiter ?? 'brace';
+    const open = delimiter === 'bracket' ? '[' : '{';
+    const close = delimiter === 'bracket' ? ']' : '}';
+    const start = options.skipWhitespace === false ? startIndex : skipLatexWhitespace(text, startIndex);
+
+    if (text[start] !== open) { return undefined; }
+
+    let depth = 1;
+    for (let i = start + 1; i < text.length; i++) {
+        const char = text[i];
+        if (char === '\\') {
+            i++;
+            continue;
+        }
+        if (char === open) {
+            depth++;
+        } else if (char === close) {
+            depth--;
+            if (depth === 0) {
+                return {
+                    content: text.substring(start + 1, i),
+                    start,
+                    end: i + 1,
+                    contentStart: start + 1,
+                    contentEnd: i,
+                    open,
+                    close
+                };
+            }
+        }
+    }
+
+    return undefined;
+}
+
+/**
+ * Reads a command exactly at this position after optional leading whitespace.
+ */
+export function readLatexCommandAt(text: string, startIndex: number, options: LatexCommandReadOptions): LatexCommandCall | undefined {
+    const start = options.skipWhitespace === false ? startIndex : skipLatexWhitespace(text, startIndex);
+    const command = `\\${options.name}`;
+    if (!text.startsWith(command, start)) { return undefined; }
+
+    let commandEnd = start + command.length;
+    let star = false;
+
+    if (text[commandEnd] === '*') {
+        if (!options.allowStar) { return undefined; }
+        star = true;
+        commandEnd++;
+    }
+
+    if (/[a-zA-Z@]/.test(text[commandEnd] ?? '')) { return undefined; }
+
+    const optionalArgs: LatexGroup[] = [];
+    const requiredArgs: LatexGroup[] = [];
+    let index = commandEnd;
+
+    const optionalCount = options.optionalArgs ?? 0;
+    for (let i = 0; i < optionalCount; i++) {
+        const optionalGroup = readLatexGroup(text, index, { delimiter: 'bracket' });
+        if (!optionalGroup) { break; }
+        optionalArgs.push(optionalGroup);
+        index = optionalGroup.end;
+    }
+
+    const requiredCount = options.requiredArgs ?? 0;
+    for (let i = 0; i < requiredCount; i++) {
+        const requiredGroup = readLatexGroup(text, index, { delimiter: 'brace' });
+        if (!requiredGroup) { return undefined; }
+        requiredArgs.push(requiredGroup);
+        index = requiredGroup.end;
+    }
+
+    return {
+        name: options.name,
+        start,
+        end: index,
+        commandEnd,
+        star,
+        optionalArgs,
+        requiredArgs
+    };
+}
+
+/**
+ * Replaces one or more LaTeX command calls while preserving unmatched source text.
+ */
+export function replaceLatexCommandCalls(text: string, rules: LatexCommandReplacementRule | LatexCommandReplacementRule[]): string {
+    const ruleList = Array.isArray(rules) ? rules : [rules];
+    if (ruleList.length === 0) { return text; }
+
+    const ruleByName = new Map(ruleList.map(rule => [rule.name, rule]));
+    const commandPattern = ruleList
+        .map(rule => rule.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .join('|');
+    const commandRegex = new RegExp(`\\\\(${commandPattern})\\b`, 'g');
+    let result = '';
+    let cursor = 0;
+    let match: RegExpExecArray | null;
+
+    while ((match = commandRegex.exec(text)) !== null) {
+        const commandName = match[1];
+        const rule = ruleByName.get(commandName);
+        if (!rule) { continue; }
+
+        const commandStart = match.index;
+        const call = readLatexCommandAt(text, commandStart, {
+            name: commandName,
+            requiredArgs: rule.requiredArgs,
+            optionalArgs: rule.optionalArgs,
+            allowStar: rule.allowStar,
+            skipWhitespace: false
+        });
+        if (!call) {
+            continue;
+        }
+
+        result += text.slice(cursor, commandStart);
+        result += rule.render(call);
+        cursor = call.end;
+        commandRegex.lastIndex = cursor;
+    }
+
+    return result + text.slice(cursor);
+}
+
+/**
+ * Scans brace depth with the small comment/escape rules used by SnapTeX.
+ */
+export function scanLatexBraceBalance(text: string, options: LatexBraceScanOptions = {}): LatexBraceScanResult {
+    const start = options.start ?? 0;
+    const end = Math.min(text.length, start + (options.limitChars ?? text.length));
+    const commentMode = options.commentMode ?? 'ignore';
+    let depth = options.initialDepth ?? 0;
+
+    for (let i = start; i < end; i++) {
         const char = text[i];
 
         if (char === '\\') {
@@ -154,40 +375,60 @@ export function findBalancedClosingBrace(text: string, startIndex: number): numb
             continue;
         }
 
+        if (char === '%') {
+            if (commentMode === 'stop') {
+                break;
+            }
+            if (commentMode === 'skip-line') {
+                const newlineIndex = text.indexOf('\n', i);
+                if (newlineIndex === -1) { break; }
+                i = newlineIndex;
+                continue;
+            }
+        }
+
         if (char === '{') {
             depth++;
         } else if (char === '}') {
             depth--;
-            if (depth === 0) {
-                return i;
+            if (options.stopWhenClosed && depth === 0) {
+                return { depth, closedAt: i };
             }
         }
     }
-    return -1;
+
+    return { depth };
 }
 
 /**
  * Finds a LaTeX command with an optional bracket argument and balanced body.
  */
 export function findCommand(text: string, tagName: string) {
-    const regex = new RegExp(`\\\\${tagName}(?:\\s*\\[[\\s\\S]*?\\])?\\s*\\{`, 'g');
-    const match = regex.exec(text);
+    const command = `\\${tagName}`;
+    let index = 0;
 
-    if (match) {
-        const startIdx = match.index;
-        const contentStart = startIdx + match[0].length;
+    while (index < text.length) {
+        const commandIndex = text.indexOf(command, index);
+        if (commandIndex === -1) { return undefined; }
 
-        const openBraceIdx = startIdx + match[0].length - 1;
-        const endIdx = findBalancedClosingBrace(text, openBraceIdx);
-
-        if (endIdx !== -1) {
+        const call = readLatexCommandAt(text, commandIndex, {
+            name: tagName,
+            requiredArgs: 1,
+            optionalArgs: 1,
+            skipWhitespace: false
+        });
+        const body = call?.requiredArgs[0];
+        if (call && body) {
             return {
-                content: text.substring(contentStart, endIdx).trim(),
-                start: startIdx,
-                end: endIdx
+                content: body.content.trim(),
+                start: call.start,
+                end: call.end
             };
         }
+
+        index = commandIndex + command.length;
     }
+
     return undefined;
 }
 

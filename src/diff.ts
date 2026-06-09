@@ -5,7 +5,7 @@ export interface DiffResult {
     insertCount: number;
 }
 
-export interface HashComparable {
+interface HashComparable {
     hash: string;
 }
 

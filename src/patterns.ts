@@ -5,46 +5,56 @@
  * environments remain aligned across parsing and rendering.
  */
 
-export const MATH_ENVS = [
+const MATH_ENVS = [
     'equation', 'align', 'gather', 'multline', 'flalign', 'alignat'
 ];
 
-export const FLOAT_ENVS = [
+const FLOAT_ENVS = [
     'figure', 'table', 'algorithm'
 ];
 
-export const THEOREM_ENVS = [
-    'theorem', 'thm',
-    'proposition', 'prop',
-    'lemma', 'lem',
-    'definition', 'def', 'defi',
-    'condition', 'cond',
-    'assumption', 'assum', 'assu',
-    'remark', 'rem', 'rmk',
-    'corollary', 'cor', 'coro',
-    'example', 'ex'
-];
-export const SECTION_LEVELS = [
-    'section', 'subsection', 'subsubsection', 'paragraph', 'subparagraph'
-];
+const THEOREM_ENV_GROUPS = [
+    ['Theorem', ['theorem', 'thm']],
+    ['Proposition', ['proposition', 'prop']],
+    ['Lemma', ['lemma', 'lem']],
+    ['Definition', ['definition', 'def', 'defi']],
+    ['Condition', ['condition', 'cond']],
+    ['Assumption', ['assumption', 'assum', 'assu']],
+    ['Remark', ['remark', 'rem', 'rmk']],
+    ['Corollary', ['corollary', 'cor', 'coro']],
+    ['Example', ['example', 'ex']]
+] as const;
 
-export const CITATION_CMDS = [
+const THEOREM_ENVS = THEOREM_ENV_GROUPS.flatMap(([, envs]) => envs);
+const THEOREM_DISPLAY_NAMES = new Map<string, string>(
+    THEOREM_ENV_GROUPS.flatMap(([displayName, envs]) => envs.map(envName => [envName, displayName]))
+);
+
+const SECTION_LEVELS = [
+    'section', 'subsection', 'subsubsection', 'paragraph', 'subparagraph'
+] as const;
+
+const CITATION_CMDS = [
     'cite', 'citep', 'citet', 'citeyear'
 ];
 
-export const SPLITTER_IGNORED_ENVS = [
+const SPLITTER_IGNORED_ENVS = [
     'proof', 'itemize', 'enumerate'
 ];
 
-export const SPLITTER_MAJOR_ENVS = [
+const SPLITTER_MAJOR_ENVS = [
     ...MATH_ENVS,
     ...FLOAT_ENVS,
     ...THEOREM_ENVS,
-    'thm', 'prop',
     'tikzpicture'
 ];
 
-const join = (arr: string[]) => arr.join('|');
+const join = (arr: readonly string[]) => arr.join('|');
+
+export function getTheoremDisplayName(envName: string): string {
+    const rawName = envName.toLowerCase();
+    return THEOREM_DISPLAY_NAMES.get(rawName) ?? rawName.charAt(0).toUpperCase() + rawName.slice(1);
+}
 
 export const REGEX_STR = {
     MATH_ENVS: join(MATH_ENVS),

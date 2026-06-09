@@ -1,11 +1,11 @@
 import * as vscode from 'vscode';
 import { IFileProvider } from './file-provider';
 import { extractMetadata } from './metadata';
-import { BibTexParser, BibEntry } from './bib';
-import { SourceLocation, PreambleData, MetadataResult } from './types';
+import { BibTexParser } from './bib';
+import { BibEntry, SourceLocation, PreambleData, MetadataResult } from './types';
 import { R_BIBLIOGRAPHY } from './patterns';
 import { BlockSpan, LatexBlockSplitter } from './splitter';
-import { normalizeUri, stableHash } from './utils';
+import { normalizeUri, scanLatexBraceBalance, stableHash } from './utils';
 
 export interface DocumentParseResult {
     bodyText: string;
@@ -159,12 +159,12 @@ export class LatexDocument {
             blockSpans: [],
             blockHashes: [],
             metadataSensitiveBlocks: [],
-            filePool: filePool,
+            filePool,
             sourceFileIndices: new Uint16Array(fileIndices),
             sourceLines: new Int32Array(lines),
             metadata: metaRes.data,
-            bibEntries: bibEntries,
-            contentStartLineOffset: contentStartLineOffset
+            bibEntries,
+            contentStartLineOffset
         };
 
         for (const b of rawBlockObjects) {
@@ -201,8 +201,7 @@ export class LatexDocument {
         depth: number = 0,
         contentOverride?: string
     ): Promise<{ textLines: string[], fileIndices: number[], lines: number[] }> {
-        const fallback = { textLines: [], fileIndices: [], lines: [] };
-        if (depth > 20) { return fallback; }
+        if (depth > 20) { return { textLines: [], fileIndices: [], lines: [] }; }
 
         let content = "";
         const filePathStr = fileUri.toString();
@@ -306,7 +305,7 @@ export class LatexDocument {
 
             portableLines.push(line);
             capturingDefinition = true;
-            braceDepth += this.getBraceDelta(line.text);
+            braceDepth += scanLatexBraceBalance(line.text, { commentMode: 'stop' }).depth;
 
             if (braceDepth <= 0 && /}/.test(line.text)) {
                 capturingDefinition = false;
@@ -317,29 +316,9 @@ export class LatexDocument {
         return portableLines;
     }
 
-    private getBraceDelta(line: string): number {
-        let delta = 0;
-        for (let i = 0; i < line.length; i++) {
-            const char = line[i];
-            if (char === '\\') {
-                i++;
-                continue;
-            }
-            if (char === '%') {
-                break;
-            }
-            if (char === '{') {
-                delta++;
-            } else if (char === '}') {
-                delta--;
-            }
-        }
-        return delta;
-    }
-
     private async loadBibliography(text: string, rootDir: vscode.Uri): Promise<Map<string, BibEntry>> {
         const match = text.match(R_BIBLIOGRAPHY);
-        if (match && rootDir) {
+        if (match) {
             let bibFile = match[1].trim();
             if (!bibFile.endsWith('.bib')) { bibFile += '.bib'; }
             const bibUri = this.fileProvider.resolve(rootDir, bibFile);

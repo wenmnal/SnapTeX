@@ -1,11 +1,17 @@
 // @ts-nocheck
 /* eslint-disable curly */
 
-export const BLOCK_VIRTUALIZATION_BASE_PRELOAD_MARGIN = 5200;
-export const BLOCK_VIRTUALIZATION_DIRECTIONAL_PRELOAD_MARGIN = 5200;
-export const BLOCK_VIRTUALIZATION_RETAIN_MARGIN = 14000;
+const BLOCK_VIRTUALIZATION_BASE_PRELOAD_MARGIN = 5200;
+const BLOCK_VIRTUALIZATION_DIRECTIONAL_PRELOAD_MARGIN = 5200;
+const BLOCK_VIRTUALIZATION_RETAIN_MARGIN = 14000;
 export const BLOCK_VIRTUALIZATION_CLEANUP_DELAY_MS = 700;
-export const BLOCK_VIRTUALIZATION_DEFAULT_HEIGHT = 180;
+const BLOCK_VIRTUALIZATION_DEFAULT_HEIGHT = 180;
+
+export function parseFirstElementFromHtml(html) {
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = html;
+    return tempDiv.firstElementChild;
+}
 
 /**
  * Maintains lightweight shells for offscreen LaTeX blocks.
@@ -66,12 +72,6 @@ export class BlockVirtualizationController {
             }
         }
 
-        parseBlockHtml(html) {
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = html;
-            return tempDiv.firstElementChild;
-        }
-
         getAnchorIdsFromBlock(block) {
             if (!block) return [];
             const anchors = new Set();
@@ -104,14 +104,12 @@ export class BlockVirtualizationController {
             shell.style.height = `${safeHeight}px`;
             shell.style.minHeight = `${safeHeight}px`;
             shell.style.overflow = 'hidden';
-            shell._snaptexLastHeight = safeHeight;
         }
 
         unlockShellHeight(shell) {
             shell.style.height = '';
             shell.style.minHeight = '';
             shell.style.overflow = '';
-            shell._snaptexLastHeight = this.getShellHeightBaseline(shell);
         }
 
         measureMountedBlockHeight(shell) {
@@ -141,7 +139,6 @@ export class BlockVirtualizationController {
 
         observeShell(shell) {
             if (!shell || !this.resizeObserver || this.observedShells.has(shell)) return;
-            shell._snaptexLastHeight = this.getShellHeightBaseline(shell);
             this.observedShells.add(shell);
             this.resizeObserver.observe(shell);
         }
@@ -162,7 +159,6 @@ export class BlockVirtualizationController {
             entries.forEach(entry => {
                 const shell = entry.target;
                 const nextHeight = entry.contentRect.height;
-                shell._snaptexLastHeight = nextHeight;
                 const key = this.getBlockKey(shell);
                 if (key && nextHeight > 0) {
                     this.heightCache.set(key, Math.ceil(nextHeight));
@@ -170,45 +166,34 @@ export class BlockVirtualizationController {
             });
         }
 
+        createShell(index, hash, height, anchors) {
+            const shell = document.createElement('div');
+            shell.className = 'latex-block-shell';
+            if (index !== null && index !== undefined) { shell.setAttribute('data-index', String(index)); }
+            if (hash) { shell.setAttribute('data-block-hash', hash); }
+            shell.setAttribute('data-mounted', 'false');
+            this.lockShellHeight(shell, height);
+            this.setShellAnchors(shell, anchors);
+            this.observeShell(shell);
+            return shell;
+        }
+
         createShellForBlock(block) {
             const index = this.getBlockIndex(block);
             const hash = block.getAttribute('data-block-hash') || '';
             const key = this.getBlockKey(block);
             const html = block.outerHTML;
-            const shell = document.createElement('div');
-            shell.className = 'latex-block-shell';
-            if (index !== null) { shell.setAttribute('data-index', index); }
-            if (hash) { shell.setAttribute('data-block-hash', hash); }
-            if (key) { shell.setAttribute('data-block-key', key); }
 
             this.htmlCache.set(key || index, html);
             const cachedHeight = this.heightCache.get(key);
             const estimatedHeight = cachedHeight || this.estimateBlockHeightFromHtml(html);
-            this.lockShellHeight(shell, estimatedHeight);
-            shell.setAttribute('data-mounted', 'false');
-            shell.setAttribute('data-html-loaded', 'true');
-            this.setShellAnchors(shell, this.getAnchorIdsFromBlock(block));
-            this.observeShell(shell);
-            return shell;
+            return this.createShell(index, hash, estimatedHeight, this.getAnchorIdsFromBlock(block));
         }
 
         createShellForMeta(meta) {
-            const shell = document.createElement('div');
-            shell.className = 'latex-block-shell';
-            shell.setAttribute('data-index', String(meta.index));
-            shell.setAttribute('data-block-hash', meta.hash);
-            shell.setAttribute('data-block-key', meta.hash || String(meta.index));
-            shell.setAttribute('data-line', String(meta.line ?? 0));
-            shell.setAttribute('data-line-count', String(meta.lineCount ?? 1));
-            shell.setAttribute('data-mounted', 'false');
-            shell.setAttribute('data-html-loaded', 'false');
-
             const cachedHeight = this.heightCache.get(meta.hash);
             const estimatedHeight = cachedHeight || this.estimateBlockHeightFromMeta(meta);
-            this.lockShellHeight(shell, estimatedHeight);
-            this.setShellAnchors(shell, meta.anchors);
-            this.observeShell(shell);
-            return shell;
+            return this.createShell(meta.index, meta.hash, estimatedHeight, meta.anchors);
         }
 
         pruneCaches(activeKeys) {
@@ -262,10 +247,6 @@ export class BlockVirtualizationController {
                 && rect.top <= window.innerHeight + BLOCK_VIRTUALIZATION_RETAIN_MARGIN;
         }
 
-        isShellNearViewport(shell, direction = 'none') {
-            return this.isShellInMountRange(shell, direction);
-        }
-
         mountShell(shell, onMissingHtml) {
             if (!this.enabled || this.getShellBlock(shell)) return null;
 
@@ -276,7 +257,7 @@ export class BlockVirtualizationController {
                 return null;
             }
 
-            const block = this.parseBlockHtml(html);
+            const block = parseFirstElementFromHtml(html);
             if (!block) return null;
 
             const reservedHeight = this.getShellHeightBaseline(shell);
@@ -288,7 +269,6 @@ export class BlockVirtualizationController {
                 this.unlockShellHeight(shell);
             }
             shell.setAttribute('data-mounted', 'true');
-            shell.setAttribute('data-html-loaded', 'true');
             this.setShellAnchors(shell, this.getAnchorIdsFromBlock(block));
             this.refreshMountedShellHeight(shell);
             return block;
@@ -328,24 +308,29 @@ export class BlockVirtualizationController {
             return mounted;
         }
 
-        replaceContentWithShells(blocks, onMount) {
+        replaceContentWithShellElements(shells, onMount, onMissingHtml) {
             const fragment = document.createDocumentFragment();
-            blocks.forEach(block => fragment.appendChild(this.createShellForBlock(block)));
-            this.pruneCaches(Array.from(fragment.children).map(shell => this.getBlockKey(shell)));
-            this.disconnectShellObservers();
-            Array.from(fragment.children).forEach(shell => this.observeShell(shell));
-            this.contentRoot.replaceChildren(fragment);
-            this.updateMountedShells(onMount);
-        }
-
-        replaceContentWithBlockMetadata(blocks, onMount, onMissingHtml) {
-            const fragment = document.createDocumentFragment();
-            blocks.forEach(meta => fragment.appendChild(this.createShellForMeta(meta)));
+            shells.forEach(shell => fragment.appendChild(shell));
             this.pruneCaches(Array.from(fragment.children).map(shell => this.getBlockKey(shell)));
             this.disconnectShellObservers();
             Array.from(fragment.children).forEach(shell => this.observeShell(shell));
             this.contentRoot.replaceChildren(fragment);
             this.updateMountedShells(onMount, onMissingHtml);
+        }
+
+        replaceContentWithShells(blocks, onMount) {
+            this.replaceContentWithShellElements(
+                blocks.map(block => this.createShellForBlock(block)),
+                onMount
+            );
+        }
+
+        replaceContentWithBlockMetadata(blocks, onMount, onMissingHtml) {
+            this.replaceContentWithShellElements(
+                blocks.map(meta => this.createShellForMeta(meta)),
+                onMount,
+                onMissingHtml
+            );
         }
 
         storeBlockHtml(index, hash, html) {
@@ -356,8 +341,6 @@ export class BlockVirtualizationController {
             if (hash && shellHash && shellHash !== hash) return null;
 
             this.htmlCache.set(key, html);
-            shell.removeAttribute('data-html-requested');
-            shell.setAttribute('data-html-loaded', 'true');
             return shell;
         }
 

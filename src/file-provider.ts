@@ -9,7 +9,6 @@ import { normalizeUri } from './utils';
  */
 export interface IFileProvider {
     read(uri: vscode.Uri): Promise<string>;
-    readBuffer(uri: vscode.Uri): Promise<Uint8Array>;
     exists(uri: vscode.Uri): Promise<boolean>;
     stat(uri: vscode.Uri): Promise<{ mtime: number }>;
     resolve(base: vscode.Uri, relative: string): vscode.Uri;
@@ -29,19 +28,10 @@ export class VscodeFileProvider implements IFileProvider {
         }
 
         try {
-            const uint8Array = await this.readBuffer(uri);
+            const uint8Array = await vscode.workspace.fs.readFile(uri);
             return new TextDecoder().decode(uint8Array);
         } catch (e) {
             console.warn(`[SnapTeX] Failed to read file: ${uri.toString()}`, e);
-            throw e;
-        }
-    }
-
-    async readBuffer(uri: vscode.Uri): Promise<Uint8Array> {
-        try {
-            return await vscode.workspace.fs.readFile(uri);
-        } catch (e) {
-            console.warn(`[SnapTeX] Failed to read binary file: ${uri.toString()}`, e);
             throw e;
         }
     }

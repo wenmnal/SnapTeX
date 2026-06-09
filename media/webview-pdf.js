@@ -10,7 +10,6 @@ var SnapTeXPdfRuntime = (() => {
   };
   var ExtensionToWebviewCommand = {
     Update: "update",
-    UpdateBinary: "update_binary",
     ScrollToBlock: "scrollToBlock",
     PdfUri: "pdfUri",
     BlockHtml: "blockHtml",

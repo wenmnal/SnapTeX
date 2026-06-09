@@ -1,43 +1,28 @@
 import {
     toRoman,
-    capitalizeFirstLetter,
     createHiddenLabelAnchor,
     escapeHtml,
     escapeHtmlAttribute,
     extractAndHideLabels,
-    findBalancedClosingBrace,
+    splitLatexCitationKeys,
+    replaceLatexCommandCalls,
     resolveLatexStyles,
     sanitizeHttpUrlForAttribute
 } from './utils';
 import { PreprocessRule, RenderContext } from './types';
 import { BibTexParser } from './bib';
-import { REGEX_STR, R_LABEL, R_REF, R_CITATION, R_BIBLIOGRAPHY, R_BIBLIOGRAPHY_STYLE } from './patterns';
+import {
+    REGEX_STR,
+    R_LABEL,
+    R_REF,
+    R_CITATION,
+    R_BIBLIOGRAPHY,
+    R_BIBLIOGRAPHY_STYLE,
+    getTheoremDisplayName
+} from './patterns';
 import { createRefLink, renderMath } from './rule-helpers';
 import { createTikzPictureRule } from './rule-tikz';
 import { createAlgorithmRule, createFigureRule, createTableRule } from './rule-floats';
-
-interface BraceArgument {
-    content: string;
-    end: number;
-}
-
-function readBraceArgument(text: string, start: number): BraceArgument | undefined {
-    const openMatch = /^\s*\{/.exec(text.slice(start));
-    if (!openMatch) {
-        return undefined;
-    }
-
-    const openIndex = start + openMatch[0].length - 1;
-    const closeIndex = findBalancedClosingBrace(text, openIndex);
-    if (closeIndex === -1) {
-        return undefined;
-    }
-
-    return {
-        content: text.slice(openIndex + 1, closeIndex),
-        end: closeIndex + 1
-    };
-}
 
 function renderExternalLink(rawUrl: string, safeContent: string, className: string, renderer: RenderContext): string {
     const safeHref = sanitizeHttpUrlForAttribute(rawUrl);
@@ -52,49 +37,33 @@ function renderExternalLink(rawUrl: string, safeContent: string, className: stri
     );
 }
 
-function renderHrefCommand(rawUrl: string, rawContent: string, renderer: RenderContext): string {
-    const styledContent = resolveLatexStyles(rawContent, html => renderer.protectHtml('style', html));
-    return renderExternalLink(rawUrl, escapeHtml(styledContent), 'latex-href', renderer);
-}
-
-function renderUrlCommand(rawUrl: string, renderer: RenderContext): string {
-    return renderExternalLink(rawUrl, escapeHtml(rawUrl.trim()), 'latex-url', renderer);
-}
-
 function replaceLatexLinkCommands(text: string, renderer: RenderContext): string {
-    const commandRegex = /\\(href|url)\s*\{/g;
-    let output = "";
-    let cursor = 0;
-    let match: RegExpExecArray | null;
-
-    while ((match = commandRegex.exec(text)) !== null) {
-        const commandName = match[1];
-        const commandStart = match.index;
-        const urlArgument = readBraceArgument(text, commandRegex.lastIndex - 1);
-        if (!urlArgument) {
-            continue;
-        }
-
-        let replacement: string;
-        let commandEnd = urlArgument.end;
-        if (commandName === 'href') {
-            const contentArgument = readBraceArgument(text, urlArgument.end);
-            if (!contentArgument) {
-                continue;
+    return replaceLatexCommandCalls(text, [
+        {
+            name: 'href',
+            requiredArgs: 2,
+            render: call => {
+                const styledContent = resolveLatexStyles(call.requiredArgs[1].content, html => renderer.protectHtml('style', html));
+                return renderExternalLink(call.requiredArgs[0].content, escapeHtml(styledContent), 'latex-href', renderer);
             }
-            replacement = renderHrefCommand(urlArgument.content, contentArgument.content, renderer);
-            commandEnd = contentArgument.end;
-        } else {
-            replacement = renderUrlCommand(urlArgument.content, renderer);
+        },
+        {
+            name: 'url',
+            requiredArgs: 1,
+            render: call => renderExternalLink(call.requiredArgs[0].content, escapeHtml(call.requiredArgs[0].content.trim()), 'latex-url', renderer)
         }
+    ]);
+}
 
-        output += text.slice(cursor, commandStart);
-        output += replacement;
-        cursor = commandEnd;
-        commandRegex.lastIndex = cursor;
-    }
+interface CitationPart {
+    error: boolean;
+    key: string;
+    author: string;
+    year: string;
+}
 
-    return output + text.slice(cursor);
+function normalizeRefType(type: string): 'ref' | 'eqref' {
+    return type === 'eqref' ? 'eqref' : 'ref';
 }
 
 /**
@@ -108,7 +77,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
     {
         name: 'clean_comments',
         priority: 5,
-        apply: (text, renderer: RenderContext) => {
+        apply: (text) => {
             return text
                 .replace(/^[ \t]*%.*(?:\r?\n|$)/gm, '')
                 .replace(/(?<!\\)%.*(\r?\n)?/g, '');
@@ -121,10 +90,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         name: 'escaped_char_dollar',
         priority: 10,
         apply: (text, renderer: RenderContext) => {
-            return text.replace(/\\([$])/g, (match, char) => {
-                const entities: Record<string, string> = { '$': '&#36;' };
-                return renderer.protectHtml('raw', entities[char] || char);
-            });
+            return text.replace(/\\([$])/g, () => renderer.protectHtml('raw', '&#36;'));
         }
     },
 
@@ -146,7 +112,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
     {
         name: 'mbox',
         priority: 20,
-        apply: (text, renderer: RenderContext) => {
+        apply: (text) => {
             return text.replace(/\\mbox/g, '\\text');
         }
     },
@@ -154,8 +120,8 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
     {
         name: 'romannumeral',
         priority: 30,
-        apply: (text, renderer: RenderContext) => {
-            text = text.replace(/\\(Rmnum|rmnum|romannumeral)\s*\{?(\d+)\}?/g, (match, cmd, numStr) => {
+        apply: (text) => {
+            text = text.replace(/\\(Rmnum|rmnum|romannumeral)\s*\{?(\d+)\}?/g, (_match, cmd, numStr) => {
                 return toRoman(parseInt(numStr), cmd === 'Rmnum');
             });
             return text;
@@ -171,7 +137,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 'gi'
             );
 
-            return text.replace(mathBlockRegex, (match, m1, c1, m3, c4, m5, envName, star, c8, offset, fullString) => {
+            return text.replace(mathBlockRegex, (match, _m1, c1, _m3, c4, _m5, envName, star, c8, offset, fullString) => {
                 if (offset > 0 && fullString[offset - 1] === '\\') { return match; }
 
                 let content = c1 || c4 || c8 || match;
@@ -184,7 +150,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 const { cleanContent, hiddenHtml } = extractAndHideLabels(content);
                 let finalMath = cleanContent.trim();
 
-                finalMath = finalMath.replace(/\\(ref|eqref)\*?\{([^}]+)\}/g, (m, reftype, key) => createRefLink(key, renderer, reftype as any));
+                finalMath = finalMath.replace(/\\(ref|eqref)\*?\{([^}]+)\}/g, (_m, reftype, key) => createRefLink(key, renderer, normalizeRefType(reftype)));
 
                 if (envName) {
                     const name = envName.toLowerCase();
@@ -220,13 +186,13 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         priority: 50,
         apply: (text, renderer: RenderContext) => {
             const processInline = (content: string) => {
-                let safeContent = content.replace(/\\(ref|eqref)\*?\{([^}]+)\}/g, (m, reftype, key) => {
-                    return createRefLink(key, renderer, reftype as any);
+                let safeContent = content.replace(/\\(ref|eqref)\*?\{([^}]+)\}/g, (_m, reftype, key) => {
+                    return createRefLink(key, renderer, normalizeRefType(reftype));
                 });
                 return renderMath(safeContent, false, renderer);
             };
 
-            text = text.replace(/\\\(([\s\S]*?)\\\)/gm, (match, content) => processInline(content));
+            text = text.replace(/\\\(([\s\S]*?)\\\)/gm, (_match, content) => processInline(content));
             return text.replace(/(\\?)\$((?:\\.|[^\\$])*)\$/gm, (match, backslash, content) => {
                 if (backslash === '\\') { return match; }
                 return processInline(content);
@@ -238,11 +204,11 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         name: 'refs_and_labels',
         priority: 60,
         apply: (text, renderer: RenderContext) => {
-            text = text.replace(new RegExp(R_LABEL, 'g'), (match, labelName) => {
+            text = text.replace(new RegExp(R_LABEL, 'g'), (_match, labelName) => {
                 return renderer.protectHtml('raw', createHiddenLabelAnchor(labelName));
             });
 
-            text = text.replace(R_REF, (match, type, labels) => {
+            text = text.replace(R_REF, (_match, type, labels) => {
                 const labelArray = labels.split(',').map((l: string) => l.trim());
                 const htmlLinks = labelArray.map((label: string) => {
                     const safeLabel = escapeHtmlAttribute(label);
@@ -260,8 +226,8 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         name: 'citations',
         priority: 70,
         apply: (text, renderer: RenderContext) => {
-            text = text.replace(R_CITATION, (match, cmd, opt1, opt2, keys) => {
-                const keyArray = keys.split(',').map((k: string) => k.trim());
+            text = text.replace(R_CITATION, (_match, cmd, opt1, opt2, keys) => {
+                const keyArray = splitLatexCitationKeys(keys);
                 let pre = '';
                 let post = '';
                 if (opt2 !== undefined) { pre = opt1 ? opt1 + ' ' : ''; post = opt2; }
@@ -269,7 +235,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 const safePre = escapeHtml(pre);
                 const safePost = escapeHtml(post);
 
-                const parts = keyArray.map((key: string) => {
+                const parts: CitationPart[] = keyArray.map((key: string) => {
                     renderer.resolveCitation(key);
                     const entry = renderer.bibEntries.get(key);
                     if (!entry) { return { error: true, key, author: "unknown", year: "unknown" }; }
@@ -282,30 +248,29 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                     const safeKey = escapeHtmlAttribute(key);
                     return `<a href="#ref-${safeKey}" class="latex-cite-link" style="color:#2e7d32; text-decoration:none;">${text}</a>`;
                 };
+                const renderYearText = (part: CitationPart, isLast: boolean) => {
+                    if (part.error) { return `[${escapeHtml(part.key)}?]`; }
+                    const suffix = isLast && safePost ? `, ${safePost}` : '';
+                    return mkLink(`${part.year}${suffix}`, part.key);
+                };
 
                 let finalHtml = "";
                 if (cmd === 'citet') {
-                    const formatted = parts.map((p: any, i: number) => {
+                    const formatted = parts.map((part, i) => {
                         const isLast = i === parts.length - 1;
-                        if (p.error) { return `[${escapeHtml(p.key)}?]`; }
-                        let yearText = p.year;
-                        if (isLast && safePost) { yearText += `, ${safePost}`; }
-                        return `${p.author} (${mkLink(yearText, p.key)})`;
+                        if (part.error) { return renderYearText(part, isLast); }
+                        return `${part.author} (${renderYearText(part, isLast)})`;
                     }).join(', ');
                     finalHtml = safePre + formatted;
                 } else if (cmd === 'citeyear') {
-                    const formatted = parts.map((p: any, i: number) => {
-                        const isLast = i === parts.length - 1;
-                        if (p.error) { return `[${escapeHtml(p.key)}?]`; }
-                        let yearText = p.year;
-                        if (isLast && safePost) { yearText += `, ${safePost}`; }
-                        return mkLink(yearText, p.key);
+                    const formatted = parts.map((part, i) => {
+                        return renderYearText(part, i === parts.length - 1);
                     }).join(', ');
                     finalHtml = safePre + formatted;
                 } else {
-                    const inner = parts.map((p: any) => {
-                        if (p.error) { return `[${escapeHtml(p.key)}?]`; }
-                        return mkLink(`${p.author}, ${p.year}`, p.key);
+                    const inner = parts.map((part) => {
+                        if (part.error) { return `[${escapeHtml(part.key)}?]`; }
+                        return mkLink(`${part.author}, ${part.year}`, part.key);
                     }).join('; ');
                     let content = inner;
                     if (safePre) { content = safePre + content; }
@@ -324,7 +289,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         priority: 71,
         apply: (text, renderer: RenderContext) => {
             text = text.replace(R_BIBLIOGRAPHY_STYLE, '');
-            return text.replace(new RegExp(R_BIBLIOGRAPHY, 'g'), (match, file) => {
+            return text.replace(new RegExp(R_BIBLIOGRAPHY, 'g'), () => {
                 if (renderer.citedKeys.length === 0) {
                     return renderer.protectHtml('bib', `<div class="latex-bibliography error">No citations found.</div>`);
                 }
@@ -356,9 +321,9 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         name: 'escaped_chars2',
         priority: 90,
         apply: (text, renderer: RenderContext) => {
-            return text.replace(/\\([%#&])/g, (match, char) => {
-                const entities: Record<string, string> = { '#': '&#35;', '&': '&amp;', '%': '&#37;' };
-                return renderer.protectHtml('raw', entities[char] || char);
+            return text.replace(/\\([%#&])/g, (_match, char) => {
+                const entity = char === '&' ? '&amp;' : char === '#' ? '&#35;' : '&#37;';
+                return renderer.protectHtml('raw', entity);
             });
         }
     },
@@ -367,12 +332,12 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         name: 'latex_quotes',
         priority: 100,
         apply: (text, renderer: RenderContext) => {
-            let processed = text.replace(/``([\s\S]*?)''/g, (match, content) => {
+            let processed = text.replace(/``([\s\S]*?)''/g, (_match, content) => {
                 const open = renderer.protectHtml('quote', '&ldquo;');
                 const close = renderer.protectHtml('quote', '&rdquo;');
                 return `${open}${content}${close}`;
             });
-            processed = processed.replace(/`([\s\S]*?)'/g, (match, content) => {
+            processed = processed.replace(/`([\s\S]*?)'/g, (_match, content) => {
                 const open = renderer.protectHtml('quote', '&lsquo;');
                 const close = renderer.protectHtml('quote', '&rsquo;');
                 return `${open}${content}${close}`;
@@ -407,27 +372,8 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         apply: (text, renderer: RenderContext) => {
             const thmRegex = new RegExp(`\\\\begin\\{(${REGEX_STR.THEOREM_ENVS})\\}(?:\\{.*?\\})?(?:\\[(.*?)\\])?([\\s\\S]*?)\\\\end\\{\\1\\}`, 'gi');
 
-            const DISPLAY_MAP: Record<string, string> = {
-                'thm': 'Theorem',
-                'prop': 'Proposition',
-                'propo': 'Proposition',
-                'lem': 'Lemma',
-                'def': 'Definition',
-                'defi': 'Definition',
-                'cond': 'Condition',
-                'ass': 'Assumption',
-                'assu': 'Assumption',
-                'cor': 'Corollary',
-                'coro': 'Corollary',
-                'rem': 'Remark',
-                'rmk': 'Remark',
-                'ex': 'Example',
-                'exam': 'Example',
-            };
-
-            text = text.replace(thmRegex, (match, envName, optArg, content) => {
-                const rawName = envName.toLowerCase();
-                const displayName = DISPLAY_MAP[rawName] || capitalizeFirstLetter(envName);
+            text = text.replace(thmRegex, (_match, envName, optArg, content) => {
+                const displayName = getTheoremDisplayName(envName);
 
                 let header = `<span class="latex-thm-head"><strong class="latex-theorem-header">${displayName} <span class="sn-cnt" data-type="thm"></span>`;
 
@@ -442,7 +388,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 return `\n\n${renderer.protectHtml('thm', `<div class="latex-theorem">${header}${body}</div>`)}\n\n`;
             });
 
-            text = text.replace(/\\begin\{proof\}(?:\[(.*?)\])?/gi, (match, optArg) => {
+            text = text.replace(/\\begin\{proof\}(?:\[(.*?)\])?/gi, (_match, optArg) => {
                 const title = optArg ? `Proof (${escapeHtml(optArg)}).` : `Proof.`;
                 return `\n${renderer.protectHtml('raw', '<span class="no-indent-marker"></span>')}**${title}** `;
             });
@@ -463,7 +409,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                     const lineBreakToken = renderer.protectHtml('meta-br', '<br/>');
                     let res = val.replace(/<br\s*\/?>/gi, lineBreakToken);
                     res = res.replace(/\\\\/g, lineBreakToken);
-                    res = res.replace(/\$((?:\\.|[^\\$])+?)\$/g, (m: string, c: string) => renderMath(c.trim(), false, renderer));
+                    res = res.replace(/\$((?:\\.|[^\\$])+?)\$/g, (_m: string, c: string) => renderMath(c.trim(), false, renderer));
                     res = resolveLatexStyles(res, html => renderer.protectHtml('style', html));
                     res = escapeHtml(res);
                     return res;
@@ -481,12 +427,12 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 text = text.replace(/ \[meta:.*?\]/g, '');
             }
 
-            text = text.replace(/\\begin\{abstract\}([\s\S]*?)\\end\{abstract\}/gi, (match, content) => {
+            text = text.replace(/\\begin\{abstract\}([\s\S]*?)\\end\{abstract\}/gi, (_match, content) => {
                 return `\n\nOOABSTRACT_STARTOO\n\n${content.trim()}\n\nOOABSTRACT_ENDOO\n\n`;
             });
 
             const keywordsRegex = /(?:\\begin\{keywords?\}([\s\S]*?)\\end\{keywords?\}|\\noindent\{\\bf Keywords\}:\s*(.*))/gi;
-            text = text.replace(keywordsRegex, (match, contentA, contentB) => {
+            text = text.replace(keywordsRegex, (_match, contentA, contentB) => {
                 const content = (contentA || contentB || '').trim();
                 return `\n\nOOKEYWORDS_STARTOO${content}OOKEYWORDS_ENDOO\n\n`;
             });
@@ -501,7 +447,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         apply: (text, renderer: RenderContext) => {
             const sectionRegex = new RegExp(`\\\\(${REGEX_STR.SECTION_LEVELS})(\\*?)\\{((?:[^{}]|{[^{}]*})*)\\}\\s*(\\\\label\\{[^}]+\\})?\\s*`, 'g');
 
-            return text.replace(sectionRegex, (match, level, star, content, label) => {
+            return text.replace(sectionRegex, (_match, level, star, content, label) => {
                 let prefix = '##';
                 if (level === 'subsection') { prefix = '###'; }
                 else if (level === 'subsubsection') { prefix = '####'; }
@@ -529,7 +475,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
     {
         name: 'lists',
         priority: 180,
-        apply: (text, renderer: RenderContext) => {
+        apply: (text) => {
             const listStack: string[] = [];
             return text.replace(/(\\begin\{(?:itemize|enumerate)\})|(\\end\{(?:itemize|enumerate)\})|(\\item(?:\[(.*?)\])?)/g, (match, pBegin, pEnd, pItem, pLabel) => {
                 if (pBegin) {
@@ -565,7 +511,7 @@ export function postProcessHtml(html: string): string {
     html = html.replace(/<p>\s*OOABSTRACT_ENDOO\s*<\/p>/g, '</div>');
     html = html.replace(/OOABSTRACT_ENDOO/g, '</div>');
     const keywordRegex = /<p>\s*OOKEYWORDS_STARTOO([\s\S]*?)OOKEYWORDS_ENDOO\s*<\/p>/g;
-    html = html.replace(keywordRegex, (match, content) => {
+    html = html.replace(keywordRegex, (_match, content) => {
         return `<div class="latex-keywords"><strong>Keywords:</strong> ${content}</div>`;
     });
     return html;

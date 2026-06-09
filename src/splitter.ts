@@ -1,4 +1,5 @@
 import { REGEX_STR } from './patterns';
+import { scanLatexBraceBalance } from './utils';
 
 export interface BlockSpan {
     start: number;
@@ -21,26 +22,14 @@ export class LatexBlockSplitter {
      * treat a paragraph break as part of the same group.
      */
     private static findClosingBrace(text: string, startIndex: number, currentDepth: number, limitChars: number = 2000): boolean {
-        let depth = currentDepth;
-        const end = Math.min(text.length, startIndex + limitChars);
-
-        for (let i = startIndex; i < end; i++) {
-            const char = text[i];
-            if (char === '\\') { i++; continue; }
-            if (char === '%') {
-                const newlineIdx = text.indexOf('\n', i);
-                if (newlineIdx === -1) {return false;}
-                i = newlineIdx;
-                continue;
-            }
-            if (char === '{') {
-                depth++;
-            } else if (char === '}') {
-                depth--;
-                if (depth === 0) {return true;}
-            }
-        }
-        return false;
+        const result = scanLatexBraceBalance(text, {
+            start: startIndex,
+            initialDepth: currentDepth,
+            limitChars,
+            stopWhenClosed: true,
+            commentMode: 'skip-line'
+        });
+        return result.closedAt !== undefined;
     }
 
     public static split(text: string, maxLines: number = 40): BlockSpan[] {
@@ -63,6 +52,14 @@ export class LatexBlockSplitter {
                 lineCount: count
             });
             currentBuffer = "";
+        };
+        const startNextBlock = (line: number, index: number) => {
+            bufferStartLine = line;
+            bufferStartIndex = index;
+        };
+        const pushCurrentBlockAndStartAt = (endIndex: number, startLine: number, startIndex: number) => {
+            pushCurrentBlock(endIndex);
+            startNextBlock(startLine, startIndex);
         };
 
         const regex = /(?:\\\$|\\\{|\\\})|(?:(?<!\\)%.*)|(\\begin\{([^}]+)\})|(\\end\{([^}]+)\})|(\{)|(\})|(\n\s*\n)|(?<!\\)(\$\$|\\\[|\\\])/g;
@@ -111,8 +108,7 @@ export class LatexBlockSplitter {
                 if (envStack.length === 0 && braceDepth === 0) {
                     pushCurrentBlock(match.index);
                     currentLine += matchLines;
-                    bufferStartLine = currentLine;
-                    bufferStartIndex = regex.lastIndex;
+                    startNextBlock(currentLine, regex.lastIndex);
                 } else {
                     currentBuffer += fullMatch;
                     currentLine += matchLines;
@@ -125,10 +121,8 @@ export class LatexBlockSplitter {
                     const isMajorEnv = majorEnvRegex.test(beginName);
 
                     if (isMajorEnv && (envStack.length === 0 && braceDepth === 0 || isTrapped)) {
-                         if (currentBuffer.trim().length > 0) {
-                            pushCurrentBlock(match.index);
-                            bufferStartLine = currentLine;
-                            bufferStartIndex = match.index;
+                          if (currentBuffer.trim().length > 0) {
+                            pushCurrentBlockAndStartAt(match.index, currentLine, match.index);
                             if (isTrapped) { envStack = []; braceDepth = 0; }
                         }
                     }
@@ -149,9 +143,7 @@ export class LatexBlockSplitter {
                 const isMathEnv = mathEnvRegex.test(endName);
                 if (isMathEnv && isTrapped) {
                     if (currentBuffer.trim().length > 0) {
-                        pushCurrentBlock(regex.lastIndex);
-                        bufferStartLine = currentLine;
-                        bufferStartIndex = regex.lastIndex;
+                        pushCurrentBlockAndStartAt(regex.lastIndex, currentLine, regex.lastIndex);
                         envStack = [];
                         braceDepth = 0;
                     }
@@ -181,10 +173,8 @@ export class LatexBlockSplitter {
                         const isBrokenByNewline = nextEmptyLineIdx !== -1 && (nextCloseIdx === -1 || nextEmptyLineIdx < nextCloseIdx);
 
                         if ((hasClose && !isBrokenByNewline) || isTrapped) {
-                             if (!isTrapped && currentBuffer.trim().length > 0) {
-                                pushCurrentBlock(match.index);
-                                bufferStartLine = currentLine;
-                                bufferStartIndex = match.index;
+                              if (!isTrapped && currentBuffer.trim().length > 0) {
+                                pushCurrentBlockAndStartAt(match.index, currentLine, match.index);
                             }
                             envStack.push('$$');
                             currentBuffer += fullMatch;
@@ -192,9 +182,7 @@ export class LatexBlockSplitter {
                             currentBuffer += fullMatch;
 
                             if (currentBuffer.trim().length > 0) {
-                                pushCurrentBlock(regex.lastIndex);
-                                bufferStartLine = currentLine + matchLines;
-                                bufferStartIndex = regex.lastIndex;
+                                pushCurrentBlockAndStartAt(regex.lastIndex, currentLine + matchLines, regex.lastIndex);
                             }
                         }
                     } else {
@@ -203,9 +191,7 @@ export class LatexBlockSplitter {
                 } else if (fullMatch === '\\[') {
                     if ((envStack.length === 0 && braceDepth === 0) || isTrapped) {
                         if (!isTrapped && currentBuffer.trim().length > 0) {
-                            pushCurrentBlock(match.index);
-                            bufferStartLine = currentLine;
-                            bufferStartIndex = match.index;
+                            pushCurrentBlockAndStartAt(match.index, currentLine, match.index);
                         }
                         envStack.push('\\]');
                     }

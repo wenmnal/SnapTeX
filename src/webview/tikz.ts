@@ -4,12 +4,12 @@
 window.tikzJaxJsUri = document.body.dataset.tikzJaxJsUri || '';
     window.tikzJaxLoadPromise = null;
     window.tikzJaxFailed = false;
-export const TIKZ_ACTIVE_RENDER_TIMEOUT_MS = 60000;
+const TIKZ_ACTIVE_RENDER_TIMEOUT_MS = 60000;
 export const TIKZ_BATCH_RENDER_TIMEOUT_MS = 65000;
 export const TIKZ_RENDER_DEBOUNCE_MS = 200;
-export const TIKZ_PENDING_SCRIPT_TYPE = 'text/snaptex-tikz';
-export const TIKZ_ACTIVE_SCRIPT_TYPE = 'text/tikz';
-export const TIKZ_PENDING_SCRIPT_SELECTOR = `script[type="${TIKZ_PENDING_SCRIPT_TYPE}"]`;
+const TIKZ_PENDING_SCRIPT_TYPE = 'text/snaptex-tikz';
+const TIKZ_ACTIVE_SCRIPT_TYPE = 'text/tikz';
+const TIKZ_PENDING_SCRIPT_SELECTOR = `script[type="${TIKZ_PENDING_SCRIPT_TYPE}"]`;
 export const TIKZ_SCRIPT_SELECTOR = `${TIKZ_PENDING_SCRIPT_SELECTOR}, script[type="${TIKZ_ACTIVE_SCRIPT_TYPE}"]`;
 
 /**
@@ -118,7 +118,6 @@ export function setTikzContainerState(container, state) {
             if (hasRenderedTikz(container) || container.getAttribute('data-tikz-state') === 'failed') return;
 
             setTikzContainerState(container, 'queued');
-            container.setAttribute('data-tikz-watchdog', 'true');
         });
     };
 

@@ -1,11 +1,5 @@
 import { cleanLatexCommands, escapeHtml, escapeHtmlAttribute, sanitizeHttpUrlForAttribute } from './utils';
-import type { RenderContext } from './types';
-
-export interface BibEntry {
-    key: string;
-    type: string;
-    fields: Record<string, string>;
-}
+import type { BibEntry, RenderContext } from './types';
 
 /**
  * Small BibTeX parser used for preview citations and bibliography rendering.
@@ -38,8 +32,6 @@ export class BibTexParser {
                 }
             }
         }
-
-        console.log(`[SnapTeX] Parsed ${entries.size} entries.`);
         return entries;
     }
 

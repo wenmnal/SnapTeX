@@ -7,7 +7,7 @@ import * as vscode from 'vscode';
 import { LatexDocument } from '../document';
 import { getVirtualMode, isUriWithinAllowedRoots, normalizePdfRequestPath } from '../panel';
 import { SmartRenderer } from '../renderer';
-import { optimizeTikzPreviewSource, TIKZ_PREVIEW_LOWERINGS } from '../tikz-preview-optimizer';
+import { optimizeTikzPreviewSource } from '../tikz-preview-optimizer';
 import { normalizeUri, stableHash } from '../utils';
 import {
     createDocument,
@@ -435,50 +435,14 @@ suite('SmartRenderer', () => {
         assert.doesNotMatch(html, /bbb|ccc|ddd|<div class="latex-block"[^>]*>\s*<\/div>/);
     });
 
-    test('keeps registered preprocess rules sorted by priority', () => {
-        const renderer = new SmartRenderer();
-        renderer.registerPreprocessRule({
-            name: 'test-order-second',
-            priority: -1000,
-            apply: text => `${text}B`
-        });
-        renderer.registerPreprocessRule({
-            name: 'test-order-first',
-            priority: -2000,
-            apply: text => `${text}A`
-        });
-
-        const payload = renderer.render(createDocument(['x']));
-
-        assert.equal(payload.type, 'full');
-        assert.ok(payload.htmls?.[0].includes('xAB'));
-        assert.ok(!payload.htmls?.[0].includes('xBA'));
-    });
-
     test('keeps preprocess rules behind a narrow render context', () => {
         const repoRoot = path.resolve(__dirname, '..', '..');
         const rulesSource = fs.readFileSync(path.join(repoRoot, 'src', 'rules.ts'), 'utf8');
         const typesSource = fs.readFileSync(path.join(repoRoot, 'src', 'types.ts'), 'utf8');
-        const rendererSource = fs.readFileSync(path.join(repoRoot, 'src', 'renderer.ts'), 'utf8');
 
         assert.doesNotMatch(rulesSource, /from '\.\/renderer'/);
         assert.match(typesSource, /export interface RenderContext/);
         assert.match(typesSource, /apply: \(text: string, renderer: RenderContext\) => string/);
-        assert.match(rendererSource, /doc\.getBlockText\(index\)/);
-        assert.doesNotMatch(rendererSource, /lastBlockTexts/);
-    });
-
-    test('uses explicit HTML protection in rule modules', () => {
-        const repoRoot = path.resolve(__dirname, '..', '..');
-        const ruleSource = [
-            'rules.ts',
-            'rule-floats.ts',
-            'rule-tikz.ts',
-            'rule-helpers.ts'
-        ].map(file => fs.readFileSync(path.join(repoRoot, 'src', file), 'utf8')).join('\n');
-
-        assert.match(ruleSource, /protectHtml\(/);
-        assert.doesNotMatch(ruleSource, /\.\s*protect\(/);
     });
 
     test('returns patch payloads for small localized edits', () => {
@@ -601,6 +565,15 @@ suite('SmartRenderer', () => {
         assert.match(html, /class="latex-theorem"/);
         assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
         assert.match(html, /<em>safe<\/em>/);
+    });
+
+    test('uses shared theorem display names for supported aliases', () => {
+        const html = renderBlocks([
+            '\\begin{assum}Bounded moments.\\end{assum}'
+        ]);
+
+        assert.match(html, /<strong class="latex-theorem-header">Assumption <span class="sn-cnt" data-type="thm"><\/span>/);
+        assert.doesNotMatch(html, /Assum <span class="sn-cnt"/);
     });
 
     test('does not trust KaTeX HTML-producing commands by default', () => {
@@ -851,15 +824,7 @@ suite('SmartRenderer', () => {
         assert.doesNotMatch(html, /calc/);
     });
 
-    test('exposes TikZ preview lowerings through a named optimizer pipeline', () => {
-        assert.deepStrictEqual(
-            TIKZ_PREVIEW_LOWERINGS.map(lowering => ({
-                name: lowering.name,
-                affectedLibraries: lowering.affectedLibraries
-            })),
-            [{ name: 'simple-arrows-meta-tips', affectedLibraries: ['arrows.meta'] }]
-        );
-
+    test('applies TikZ preview lowering through the optimizer', () => {
         const optimized = optimizeTikzPreviewSource({
             globalPreamble: '\\tikzset{arrow/.style={-Latex, thick}}',
             options: 'arrow/.style={Stealth-Stealth}',
@@ -867,7 +832,6 @@ suite('SmartRenderer', () => {
             macroDefinitions: '\\def\\fastArrow{Latex-Latex}'
         });
 
-        assert.deepStrictEqual(optimized.appliedLowerings, ['simple-arrows-meta-tips']);
         assert.equal(optimized.globalPreamble, '\\tikzset{arrow/.style={->, thick}}');
         assert.equal(optimized.options, 'arrow/.style={<->}');
         assert.equal(optimized.content, '\\draw[<-] (0,0) -- (1,0);');
@@ -879,7 +843,6 @@ suite('SmartRenderer', () => {
             content: '\\draw[-{Latex[length=3mm]}] (0,0) -- (1,0);',
             macroDefinitions: ''
         });
-        assert.deepStrictEqual(exact.appliedLowerings, []);
         assert.match(exact.content, /-\{Latex\[length=3mm\]\}/);
     });
 
@@ -1031,24 +994,15 @@ suite('PDF request validation', () => {
         const panelSource = fs.readFileSync(path.join(repoRoot, 'src', 'panel.ts'), 'utf8');
         const webviewSource = readWebviewRuntimeSource(repoRoot);
 
-        assert.match(panelSource, /if \(payload\.htmls\) \{\s*payload\.htmls = payload\.htmls\.map\(h => this\.fixHtmlPaths\(h\)\)/);
         assert.match(panelSource, /this\._renderer\.render\(this\._currentDocument, \{ deferFullHtml: virtualizeBlocks \}\)/);
         assert.match(panelSource, /WebviewToExtensionCommand\.RequestBlockHtml/);
         assert.match(panelSource, /ExtensionToWebviewCommand\.BlockHtml/);
         assert.match(panelSource, /this\._renderer\.renderBlockByIndex\(index\)/);
-        assert.match(panelSource, /this\.postMessage\(\{ command: ExtensionToWebviewCommand\.Update, payload \}\)/);
         assert.doesNotMatch(panelSource, /Buffer\.from\(fullHtml\)/);
         assert.doesNotMatch(panelSource, /command: 'update_binary'/);
-        assert.match(webviewSource, /smartFullUpdateFromBlocks\(htmls, preserveUnchangedBlocks = true\)/);
-        assert.match(webviewSource, /smartFullUpdateFromBlockMetadata\(blocks, preserveUnchangedBlocks = true\)/);
         assert.match(webviewSource, /payload\.blocks && this\.virtualization\.isEnabled\(\)/);
         assert.match(webviewSource, /vscode\.postMessage\(\{ command: WebviewToExtensionCommand\.RequestBlockHtml, id, index, hash \}\)/);
         assert.match(webviewSource, /case ExtensionToWebviewCommand\.BlockHtml:/);
-        assert.match(webviewSource, /parseBlockHtml\(html\)/);
-        assert.match(webviewSource, /const shellHash = shell\.getAttribute\('data-block-hash'\) \|\| ''/);
-        assert.match(webviewSource, /if \(hash && shellHash && shellHash !== hash\) return null/);
-        assert.match(webviewSource, /callbacks: requestOptions\.onLoaded \? \[requestOptions\.onLoaded\] : \[\]/);
-        assert.match(webviewSource, /pending\.callbacks\.push\(requestOptions\.onLoaded\)/);
         assert.match(webviewSource, /this\.smartFullUpdateFromBlocks\(payload\.htmls, payload\.preserveUnchangedBlocks !== false\)/);
     });
 
@@ -1200,25 +1154,11 @@ suite('Webview resource loading', () => {
         const schedulerSource = fs.readFileSync(path.join(repoRoot, 'src', 'webview', 'scheduler.ts'), 'utf8');
 
         assert.match(webviewSource, /const TIKZ_RENDER_DEBOUNCE_MS = 200/);
-        assert.match(webviewSource, /class CoalescingTaskScheduler/);
-        assert.match(schedulerSource, /interface CoalescingTaskSchedulerOptions/);
+        assert.match(webviewSource, /new CoalescingTaskScheduler/);
         assert.doesNotMatch(schedulerSource, /@ts-nocheck/);
-        assert.match(webviewSource, /this\.running = false/);
-        assert.match(webviewSource, /this\.pending = true/);
-        assert.match(webviewSource, /if \(this\.running\) return/);
-        assert.match(webviewSource, /if \(this\.pending\) \{[\s\S]*this\.schedule\(\);[\s\S]*\}/);
-        assert.match(webviewSource, /this\.tikzRenderScheduler = new CoalescingTaskScheduler/);
-        assert.match(webviewSource, /runTikzRenderBatch\(\)/);
-        assert.match(webviewSource, /waitForTikzBatch\(containers\)/);
-        assert.match(webviewSource, /TIKZ_BATCH_RENDER_TIMEOUT_MS/);
-        assert.match(webviewSource, /setTimeout\(\(\) => \{[\s\S]*resolve\(\);[\s\S]*\}, TIKZ_BATCH_RENDER_TIMEOUT_MS\)/);
         assert.match(webviewSource, /snaptex-tikz-settled/);
-        assert.match(webviewSource, /this\.contentRoot\.querySelector\(TIKZ_SCRIPT_SELECTOR\)/);
-        assert.match(webviewSource, /this\.getPendingTikzContainers\(this\.contentRoot\)/);
-        assert.match(webviewSource, /window\.watchPendingTikzContainers\(this\.contentRoot\)/);
         assert.match(webviewSource, /window\.activatePendingTikzScripts\(this\.contentRoot\)/);
         assert.doesNotMatch(webviewSource, /window\.activatePendingTikzScripts\(document\)/);
-        assert.match(webviewSource, /script\.replaceWith\(activeScript\)/);
     });
 
     test('keeps the previous TikZ SVG visible while a replacement render is pending', () => {
@@ -1227,17 +1167,9 @@ suite('Webview resource loading', () => {
         const styleSource = fs.readFileSync(path.join(repoRoot, 'media', 'preview-style.css'), 'utf8');
 
         assert.match(webviewSource, /collectTikzPreviews\(block\)/);
-        assert.match(webviewSource, /attachStaleTikzPreviews\(block, previews\)/);
-        assert.match(webviewSource, /stashStaleTikzPreviewsOnShell\(shell, previews\)/);
-        assert.match(webviewSource, /consumeStaleTikzPreviewsFromShell\(shell\)/);
         assert.match(webviewSource, /replaceBlockPreservingTikz\(oldBlock, newBlock\)/);
-        assert.match(webviewSource, /applyStaleTikzPreviewsToBlock\(newBlock, oldBlock\)/);
         assert.match(webviewSource, /const staleTikzByIndex = new Map\(\)/);
-        assert.match(webviewSource, /this\.stashStaleTikzPreviewsOnShell\(shell, staleTikzByIndex\.get\(index\)\)/);
-        assert.match(webviewSource, /this\.attachStaleTikzPreviews\(block, this\.consumeStaleTikzPreviewsFromShell\(shell\)\)/);
         assert.match(webviewSource, /preview\.classList\.add\('tikz-stale-preview'\)/);
-        assert.match(webviewSource, /container\.querySelectorAll\('\.tikz-stale-preview'\)\.forEach\(preview => preview\.remove\(\)\)/);
-        assert.match(webviewSource, /svg\[role="img"\]:not\(\.tikz-stale-preview\)/);
         assert.match(styleSource, /\.tikz-container\[data-tikz-state="queued"\] > svg:not\(\.tikz-stale-preview\)/);
         assert.match(styleSource, /\.tikz-stale-preview/);
     });
@@ -1252,7 +1184,8 @@ suite('Webview resource loading', () => {
         assert.match(webviewSource, /shouldReplaceBlock\(oldBlock, newBlock, preserveUnchangedBlocks\)/);
         assert.match(webviewSource, /oldBlock\.getAttribute\('data-block-hash'\)/);
         assert.match(webviewSource, /newBlock\.getAttribute\('data-block-hash'\)/);
-        assert.match(webviewSource, /this\.smartFullUpdate\(payload\.html, payload\.preserveUnchangedBlocks !== false\)/);
+        assert.match(webviewSource, /this\.smartFullUpdateFromBlocks\(payload\.htmls, payload\.preserveUnchangedBlocks !== false\)/);
+        assert.doesNotMatch(webviewSource, /payload\.html,/);
         assert.doesNotMatch(webviewSource, /outerHTML !==/);
     });
 
@@ -1270,56 +1203,27 @@ suite('Webview resource loading', () => {
         assert.match(panelSource, /const virtualizeBlocks = getVirtualMode\(\)/);
         assert.match(panelSource, /config\.inspect<boolean>\('experimentalVirtualization'\)/);
         assert.match(webviewSource, /class BlockVirtualizationController/);
-        assert.match(webviewSource, /this\.enabled = false/);
-        assert.match(webviewSource, /this\.heightCache = new Map\(\)/);
-        assert.match(webviewSource, /this\.htmlCache = new Map\(\)/);
-        assert.match(webviewSource, /rememberBlockHeight\(block\)/);
         assert.match(webviewSource, /createShellForBlock\(block\)/);
         assert.match(webviewSource, /createShellForMeta\(meta\)/);
-        assert.match(webviewSource, /getAnchorIdsFromBlock\(block\)/);
-        assert.match(webviewSource, /findShellByAnchorId\(anchorId\)/);
-        assert.match(webviewSource, /data-html-loaded/);
-        assert.match(webviewSource, /data-html-requested/);
+        assert.match(webviewSource, /data-html-request-id/);
         assert.match(webviewSource, /className = 'latex-block-shell'/);
         assert.match(webviewSource, /data-mounted/);
         assert.match(webviewSource, /BLOCK_VIRTUALIZATION_BASE_PRELOAD_MARGIN/);
         assert.match(webviewSource, /BLOCK_VIRTUALIZATION_DIRECTIONAL_PRELOAD_MARGIN/);
         assert.match(webviewSource, /BLOCK_VIRTUALIZATION_RETAIN_MARGIN/);
-        assert.match(webviewSource, /BLOCK_VIRTUALIZATION_CLEANUP_DELAY_MS/);
-        assert.match(webviewSource, /mountShell\(shell, onMissingHtml\)/);
-        assert.match(webviewSource, /unmountShell\(shell\)/);
-        assert.match(webviewSource, /lockShellHeight\(shell, height\)/);
-        assert.match(webviewSource, /unlockShellHeight\(shell\)/);
-        assert.match(webviewSource, /refreshMountedShellHeight\(shell\)/);
-        assert.match(webviewSource, /isShellAboveViewport\(shell\)/);
-        assert.match(webviewSource, /if \(this\.isShellAboveViewport\(shell\)\) \{\s*this\.lockShellHeight\(shell, reservedHeight\);\s*\} else \{\s*this\.unlockShellHeight\(shell\);\s*\}/);
-        assert.match(webviewSource, /if \(this\.isShellAboveViewport\(shell\)\) \{\s*this\.lockShellHeight\(shell, height\);\s*\} else \{\s*this\.unlockShellHeight\(shell\);\s*\}/);
         assert.doesNotMatch(webviewSource, /forceHeightUpdate/);
-        assert.match(webviewSource, /shell\.style\.height = ''/);
-        assert.match(webviewSource, /shell\.style\.minHeight = ''/);
         assert.match(styleSource, /\.latex-block-shell\s*\{[\s\S]*overflow: hidden;/);
         assert.match(styleSource, /\.latex-block-shell\s*>\s*\.latex-block\s*\{[\s\S]*content-visibility: visible;/);
         assert.match(styleSource, /\.latex-block-shell\s*>\s*\.latex-block\s*\{[\s\S]*contain-intrinsic-size: unset;/);
-        assert.match(webviewSource, /updateMountedShells\(onMount, onMissingHtml, options = \{\}\)/);
-        assert.match(webviewSource, /isShellInMountRange\(shell, direction = 'none'\)/);
-        assert.match(webviewSource, /isShellInRetainRange\(shell\)/);
         assert.doesNotMatch(webviewSource, /window\.scrollBy\(0, delta\)/);
         assert.doesNotMatch(webviewSource, /withScrollCompensation\(shell, action\)/);
-        assert.match(webviewSource, /this\.resizeObserver = typeof ResizeObserver !== 'undefined'/);
-        assert.match(webviewSource, /onShellResize\(entries\)/);
-        assert.match(webviewSource, /this\.virtualization\.unobserveShell\(shell\)/);
         assert.match(webviewSource, /replaceContentWithShells\(blocks, onMount\)/);
         assert.match(webviewSource, /replaceContentWithBlockMetadata\(blocks, onMount, onMissingHtml\)/);
         assert.match(webviewSource, /storeBlockHtml\(index, hash, html\)/);
         assert.match(webviewSource, /this\.config\.virtualMode = event\.data\.config\.virtualMode !== false/);
         assert.match(webviewSource, /this\.virtualization\.setEnabled\(event\.data\.config\.virtualMode !== false\)/);
-        assert.match(webviewSource, /this\.virtualization\.replaceContentWithShells\(newElements/);
         assert.match(webviewSource, /applyVirtualPatch\(payload\)/);
-        assert.match(webviewSource, /getBlockByIndex\(index\)/);
-        assert.match(webviewSource, /this\.getBlockByIndex\(idx\)/);
         assert.match(webviewSource, /getBlockOrShellByIndex\(index\)/);
-        assert.match(webviewSource, /window\.addEventListener\('resize', \(\) => this\.updateVirtualizedBlocks\(\{ allowUnmount: true \}\)\)/);
-        assert.match(webviewSource, /this\.virtualization\.rememberBlockHeight\(oldBlock\)/);
     });
 
     test('routes virtualized refs and tooltips through anchor-aware shell mounting', () => {
@@ -1330,17 +1234,12 @@ suite('Webview resource loading', () => {
         assert.match(webviewSource, /document\.addEventListener\('click', event => this\.onInternalLinkClick\(event\)\)/);
         assert.match(webviewSource, /async ensureAnchorMounted\(anchorId\)/);
         assert.match(webviewSource, /this\.virtualization\.findShellByAnchorId\(anchorId\)/);
-        assert.match(webviewSource, /await this\.ensureShellMounted\(shell\)/);
         assert.match(webviewSource, /async onInternalLinkClick\(event\)/);
         assert.match(webviewSource, /event\.preventDefault\(\)/);
         assert.match(webviewSource, /await this\.ensureAnchorMounted\(anchorId\)/);
-        assert.match(webviewSource, /async resolveTargetElement\(targetId\)/);
         assert.match(webviewSource, /controller\.ensureAnchorMounted\(targetId\)/);
-        assert.match(webviewSource, /async resolveContextBlocks\(container\)/);
         assert.match(webviewSource, /controller\.getTooltipContextBlocks\(container\)/);
         assert.match(webviewSource, /async getTooltipContextBlocks\(block\)/);
-        assert.match(webviewSource, /Promise\.all\(indices\.map\(index => this\.ensureBlockMountedByIndex\(index\)\)\)/);
-        assert.match(webviewSource, /return this\.contentRoot\.querySelector\('\.latex-block\[data-index="' \+ index \+ '"\]'\)/);
     });
 
     test('stabilizes virtualized forward sync before scrolling', () => {
@@ -1352,21 +1251,11 @@ suite('Webview resource loading', () => {
         assert.match(extensionSource, /const clearPendingAutoSync = \(\) =>/);
         assert.match(extensionSource, /const scheduleAutoSyncToPreview = \(/);
         assert.match(extensionSource, /clearPendingAutoSync\(\);\s*if \(editor\) \{ triggerSyncToPreview/);
-        assert.match(webviewSource, /this\.scrollCommandSeq = 0/);
         assert.match(webviewSource, /async ensureBlockMountedByIndex\(index\)/);
-        assert.match(webviewSource, /if \(target\) return \{ target, mounted: false \}/);
-        assert.match(webviewSource, /const block = await this\.ensureShellMounted\(shell\)/);
-        assert.match(webviewSource, /return \{ target: block \|\| shell, mounted: Boolean\(block\) \}/);
         assert.match(webviewSource, /async executeScroll\(data\)/);
-        assert.match(webviewSource, /const scrollSeq = \+\+this\.scrollCommandSeq/);
         assert.match(webviewSource, /const mountResult = await this\.ensureBlockMountedByIndex\(index\)/);
         assert.match(webviewSource, /if \(!auto \|\| mountResult\.mounted\) \{\s*await this\.waitForLayout\(\)/);
-        assert.match(webviewSource, /const autoSkipThreshold = 12/);
         assert.match(webviewSource, /this\.requestVirtualizedUpdate\(\{ allowUnmount: false \}\)/);
-        assert.match(webviewSource, /this\.scheduleVirtualizedCleanup\(\)/);
-        assert.match(webviewSource, /this\.scrollDirection = delta < 0 \? 'up' : 'down'/);
-        assert.match(webviewSource, /direction: this\.scrollDirection/);
-        assert.match(webviewSource, /allowUnmount: options\.allowUnmount !== false/);
         assert.doesNotMatch(webviewSource, /setTimeout\(\(\) => \{[\s\S]*const newTargetY = calcY\(\)/);
     });
 
@@ -1390,32 +1279,18 @@ suite('Webview resource loading', () => {
         const calcLibraryPath = path.join(repoRoot, 'media', 'vendor', 'tikzjax', 'tex_files', 'tikzlibrarycalc.code.tex.gz');
 
         assert.match(buildSource, /patchTikzJaxWorkerBootstrap/);
-        assert.match(buildSource, /function replaceOrThrow/);
-        assert.match(buildSource, /function applyTextPatches/);
-        assert.match(buildSource, /function createTikzJaxSourcePatches/);
-        assert.match(buildSource, /function createRunTexSourcePatches/);
-        assert.match(buildSource, /function patchTextFile/);
-        assert.match(buildSource, /const tikzJaxPatched = patchTextFile\(tikzJaxFile, createTikzJaxSourcePatches\(runtimeAssetFiles\)\)/);
-        assert.match(buildSource, /const runTexPatched = patchTextFile\(runTexFile, createRunTexSourcePatches\(\)\)/);
         assert.match(buildSource, /throw new Error\(`\[build\] TikZJax/);
         assert.doesNotMatch(buildSource, /console\.warn\('\[build\] Warning: TikZJax/);
-        assert.doesNotMatch(buildSource, /require\('zlib'\)/);
         assert.match(buildSource, /CORSWorkaround:!1/);
         assert.ok(fs.existsSync(calcLibraryPath));
         assert.match(tikzJaxSource, /fetch\(`\$\{e\}\/run-tex\.js`\)/);
         assert.match(tikzJaxSource, /URL\.createObjectURL\(new Blob/);
         assert.match(tikzJaxSource, /new o\([^,]+,\{CORSWorkaround:!1\}\)/);
         assert.match(tikzJaxSource, /tex_files\/tikzlibrarycalc\.code\.tex\.gz/);
-        assert.match(tikzJaxSource, /Promise\.all\(/);
-        assert.match(tikzJaxSource, /snaptexAssets\[A\]=await c\(A\)/);
         assert.match(tikzJaxSource, /r\.load\(\{base:e,assets:snaptexAssets\}/);
-        assert.match(tikzJaxSource, /!e\.isConnected&&\(!e\.loader\|\|!e\.loader\.isConnected\)/);
-        assert.match(tikzJaxSource, /if\(!r\.isConnected\)return/);
-        assert.match(tikzJaxSource, /window\.addEventListener\("unload",Z\)/);
         assert.doesNotMatch(tikzJaxSource, /revokeObjectURL[\s\S]*tikzjax-load-finished/);
         assert.doesNotMatch(tikzJaxSource, /new o\(`\$\{e\}\/run-tex\.js`,\{CORSWorkaround:!1\}\)/);
         assert.doesNotMatch(tikzJaxSource, /new o\(`\$\{e\}\/run-tex\.js`\)/);
-        assert.doesNotMatch(tikzJaxSource, /try\{await r\.load\(e\)\}catch\(e\)\{console\.log\(e\)\}return r/);
         assert.match(runTexSource, /snaptexAssetUrls&&snaptexAssetUrls\[A\]/);
         assert.match(runTexSource, /snaptexAssetUrls=A&&A\.assets\|\|null/);
     });

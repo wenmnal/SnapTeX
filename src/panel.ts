@@ -14,12 +14,8 @@ import {
     type RevealLineMessage
 } from './webview-messages';
 
-function isDebugMemoryEnabled(): boolean {
-    return vscode.workspace.getConfiguration('snaptex').get<boolean>('debugMemory', false);
-}
-
 function logHostMemory(label: string) {
-    if (!isDebugMemoryEnabled()) {
+    if (!vscode.workspace.getConfiguration('snaptex').get<boolean>('debugMemory', false)) {
         return;
     }
 
@@ -139,13 +135,10 @@ export class TexPreviewPanel {
     private _fileProvider: VscodeFileProvider;
 
     private _sourceUri: vscode.Uri | undefined;
-    private _currentDocument: LatexDocument | undefined;
+    private readonly _currentDocument: LatexDocument;
     private _updateRunning = false;
     private _pendingRootUri: vscode.Uri | undefined;
     private _webviewReady = false;
-
-    private readonly _onWebviewLoadedEmitter = new vscode.EventEmitter<void>();
-    public readonly onWebviewLoaded = this._onWebviewLoadedEmitter.event;
 
     public static createOrShow(extensionUri: vscode.Uri, renderer: SmartRenderer): TexPreviewPanel {
         const editor = vscode.window.activeTextEditor;
@@ -211,7 +204,6 @@ export class TexPreviewPanel {
                         this._webviewReady = true;
                         this._renderer.resetState();
                         void this.update(this._pendingRootUri);
-                        this._onWebviewLoadedEmitter.fire();
                         break;
                     case WebviewToExtensionCommand.RevealLine:
                         this.handleRevealLine(message);
@@ -309,7 +301,7 @@ export class TexPreviewPanel {
         if (!this._sourceUri) { return html; }
 
         const docDir = vscode.Uri.joinPath(this._sourceUri, '..');
-        return html.replace(/(src|data-pdf-src)="LOCAL_IMG:([^"]+)"/g, (match, attr, relPath) => {
+        return html.replace(/(src|data-pdf-src)="LOCAL_IMG:([^"]+)"/g, (_match, attr, relPath) => {
             let normalizedPath = decodeHtmlAttribute(relPath).replace(/\\/g, '/');
             if (normalizedPath.startsWith('./')) { normalizedPath = normalizedPath.substring(2); }
 
@@ -371,11 +363,7 @@ export class TexPreviewPanel {
         });
     }
 
-    private resolveUpdateUri(rootUri?: vscode.Uri): vscode.Uri | undefined {
-        if (rootUri) {
-            return rootUri;
-        }
-
+    private resolveUpdateUri(): vscode.Uri | undefined {
         const editor = vscode.window.activeTextEditor;
         if (editor) {
             return editor.document.uri;
@@ -445,23 +433,21 @@ export class TexPreviewPanel {
         };
         this.postWebviewConfig();
 
-        if (this._currentDocument) {
-            const virtualizeBlocks = getVirtualMode();
-            const parseResult = await this._currentDocument.parse(this._sourceUri, text);
-            logHostMemory('after parse');
+        const virtualizeBlocks = getVirtualMode();
+        const parseResult = await this._currentDocument.parse(this._sourceUri, text);
+        logHostMemory('after parse');
 
-            this._currentDocument.applyResult(parseResult);
-            const payload = this._renderer.render(this._currentDocument, { deferFullHtml: virtualizeBlocks });
-            logHostMemory('after render');
-            this._currentDocument.releaseTextContent();
+        this._currentDocument.applyResult(parseResult);
+        const payload = this._renderer.render(this._currentDocument, { deferFullHtml: virtualizeBlocks });
+        logHostMemory('after render');
+        this._currentDocument.releaseTextContent();
 
-            if (payload.htmls) {
-                payload.htmls = payload.htmls.map(h => this.fixHtmlPaths(h));
-            }
-            logHostMemory('after fixPaths');
-            this.postMessage({ command: ExtensionToWebviewCommand.Update, payload });
-            logHostMemory('after postMessage');
+        if (payload.htmls) {
+            payload.htmls = payload.htmls.map(h => this.fixHtmlPaths(h));
         }
+        logHostMemory('after fixPaths');
+        this.postMessage({ command: ExtensionToWebviewCommand.Update, payload });
+        logHostMemory('after postMessage');
     }
 
     private async _getWebviewSkeleton(): Promise<string> {
@@ -500,7 +486,6 @@ export class TexPreviewPanel {
 
     public dispose() {
         TexPreviewPanel.currentPanel = undefined;
-        this._onWebviewLoadedEmitter.dispose();
         this._panel.dispose();
         while (this._disposables.length) { this._disposables.pop()?.dispose(); }
     }

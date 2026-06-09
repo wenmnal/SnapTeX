@@ -3,6 +3,25 @@ import { escapeHtmlAttribute, extractAndHideLabels, findCommand, resolveLatexSty
 import { recoverPreservedTokens, renderCaptionContent, unwrapResizeboxAroundProtectedContent } from './rule-helpers';
 import { findFirstTabularEnvironment, renderLatexTabular, renderLatexTableInlineContent } from './latex-table';
 
+interface FloatCaptionConfig {
+    className: string;
+    label: string;
+    counterType: 'fig' | 'alg' | 'tbl';
+}
+
+function extractRenderedCaption(content: string, renderer: RenderContext, config: FloatCaptionConfig): { content: string; captionHtml: string } {
+    const captionRes = findCommand(content, 'caption');
+    if (!captionRes) {
+        return { content, captionHtml: '' };
+    }
+
+    const captionHtml = `<div class="${config.className}"><strong>${config.label} <span class="sn-cnt" data-type="${config.counterType}"></span>:</strong> ${renderCaptionContent(captionRes.content, renderer)}</div>`;
+    return {
+        content: content.substring(0, captionRes.start) + content.substring(captionRes.end),
+        captionHtml
+    };
+}
+
 /**
  * Converts LaTeX figure environments to protected HTML, preserving captions,
  * labels, local images, PDF canvases, and nested protected TikZ content.
@@ -12,15 +31,10 @@ export function createFigureRule(): PreprocessRule {
         name: 'figure',
         priority: 120,
         apply: (text: string, renderer: RenderContext) => {
-            return text.replace(/\\begin\{figure(\*?)\}(?:\[.*?\])?([\s\S]*?)\\end\{figure\1\}/gi, (_match, star, content) => {
-                const captionRes = findCommand(content, 'caption');
-                let captionHtml = '';
-                let body = content;
-
-                if (captionRes) {
-                    captionHtml = `<div class="figure-caption"><strong>Figure <span class="sn-cnt" data-type="fig"></span>:</strong> ${renderCaptionContent(captionRes.content, renderer)}</div>`;
-                    body = body.substring(0, captionRes.start) + body.substring(captionRes.end + 1);
-                }
+            return text.replace(/\\begin\{figure(\*?)\}(?:\[.*?\])?([\s\S]*?)\\end\{figure\1\}/gi, (_match, _star, content) => {
+                const extracted = extractRenderedCaption(content, renderer, { className: 'figure-caption', label: 'Figure', counterType: 'fig' });
+                let body = extracted.content;
+                const captionHtml = extracted.captionHtml;
 
                 const { cleanContent, hiddenHtml } = extractAndHideLabels(body);
                 body = cleanContent;
@@ -55,13 +69,10 @@ export function createAlgorithmRule(): PreprocessRule {
         name: 'algorithm',
         priority: 130,
         apply: (text: string, renderer: RenderContext) => {
-            return text.replace(/\\begin\{algorithm(\*?)\}(?:\[.*?\])?([\s\S]*?)\\end\{algorithm\1\}/gi, (_match, star, content) => {
-                const captionRes = findCommand(content, 'caption');
-                let captionHtml = '';
-                if (captionRes) {
-                    captionHtml = `<div class="alg-caption"><strong>Algorithm <span class="sn-cnt" data-type="alg"></span>:</strong> ${renderCaptionContent(captionRes.content, renderer)}</div>`;
-                    content = content.substring(0, captionRes.start) + content.substring(captionRes.end + 1);
-                }
+            return text.replace(/\\begin\{algorithm(\*?)\}(?:\[.*?\])?([\s\S]*?)\\end\{algorithm\1\}/gi, (_match, _star, content) => {
+                const extracted = extractRenderedCaption(content, renderer, { className: 'alg-caption', label: 'Algorithm', counterType: 'alg' });
+                content = extracted.content;
+                const captionHtml = extracted.captionHtml;
 
                 const algRegex = /\\begin\{algorithmic\}(?:\[(.*?)\])?([\s\S]*?)\\end\{algorithmic\}/g;
                 let bodyHtml = '';
@@ -129,14 +140,10 @@ export function createTableRule(): PreprocessRule {
         name: 'table',
         priority: 118,
         apply: (text: string, renderer: RenderContext) => {
-            return text.replace(/\\begin\{table(\*?)\}(?:\[.*?\])?([\s\S]*?)\\end\{table\1\}/gi, (_match, star, content) => {
-                const captionRes = findCommand(content, 'caption');
-                let captionHtml = '';
-
-                if (captionRes) {
-                    captionHtml = `<div class="table-caption"><strong>Table <span class="sn-cnt" data-type="tbl"></span>:</strong> ${renderCaptionContent(captionRes.content, renderer)}</div>`;
-                    content = content.substring(0, captionRes.start) + content.substring(captionRes.end + 1);
-                }
+            return text.replace(/\\begin\{table(\*?)\}(?:\[.*?\])?([\s\S]*?)\\end\{table\1\}/gi, (_match, _star, content) => {
+                const extracted = extractRenderedCaption(content, renderer, { className: 'table-caption', label: 'Table', counterType: 'tbl' });
+                content = extracted.content;
+                const captionHtml = extracted.captionHtml;
 
                 let innerContent = content.replace(/\\begin\{threeparttable\}/g, '').replace(/\\end\{threeparttable\}/g, '');
                 let notesHtml = '';

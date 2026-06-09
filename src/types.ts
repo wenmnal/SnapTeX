@@ -1,4 +1,8 @@
-import type { BibEntry } from './bib';
+export interface BibEntry {
+    key: string;
+    type: string;
+    fields: Record<string, string>;
+}
 
 export interface SourceLocation {
     file: string;
@@ -28,6 +32,20 @@ export interface RenderedBlockMeta {
     anchors: string[];
 }
 
+export interface BlockNumberingCounts {
+    eq: string[];
+    fig: string[];
+    tbl: string[];
+    alg: string[];
+    sec: string[];
+    thm: string[];
+}
+
+export interface NumberingPayload {
+    blocks: { [index: number]: BlockNumberingCounts };
+    labels: Record<string, string>;
+}
+
 export interface PatchPayload {
     type: 'full' | 'patch';
     start?: number;
@@ -37,10 +55,7 @@ export interface PatchPayload {
     shift?: number;
     preserveUnchangedBlocks?: boolean;
 
-    numbering?: {
-        blocks: { [index: number]: any };
-        labels: Record<string, string>;
-    };
+    numbering?: NumberingPayload;
 
     /**
      * Blocks that must be refreshed even though their source hash did not change.
@@ -51,7 +66,6 @@ export interface PatchPayload {
 export interface RenderContext {
     currentMacros: Record<string, string>;
     currentDocument?: { metadata: PreambleData };
-    globalLabelMap: Record<string, string>;
     citedKeys: string[];
     bibEntries: Map<string, BibEntry>;
     protect(namespace: string, content: string): string;

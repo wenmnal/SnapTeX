@@ -18,9 +18,9 @@ let autoSyncTimer: NodeJS.Timeout | undefined;
 let currentRenderedUri: vscode.Uri | undefined = undefined;
 let activeCursorScreenRatio: number = 0.5;
 
-const debounce = (func: Function, waitGetter: () => number) => {
+const debounce = <Args extends unknown[]>(func: (...args: Args) => void, waitGetter: () => number) => {
     let timeout: NodeJS.Timeout | undefined;
-    return (...args: any[]) => {
+    return (...args: Args) => {
         if (timeout) { clearTimeout(timeout); }
         timeout = setTimeout(() => func(...args), waitGetter());
     };
@@ -73,8 +73,6 @@ export function activate(context: vscode.ExtensionContext) {
     console.log('[SnapTeX] Activated!');
 
     const renderer = new SmartRenderer();
-
-    renderer.reloadAllRules();
 
     const triggerSyncToPreview = (editor: vscode.TextEditor, targetLine: number, isAutoScroll: boolean, viewRatio: number, targetChar?: number) => {
         if (!TexPreviewPanel.currentPanel) {return;}
@@ -143,8 +141,6 @@ export function activate(context: vscode.ExtensionContext) {
 
         currentRenderedUri = targetRoot;
 
-        renderer.reloadAllRules();
-
         TexPreviewPanel.currentPanel.update(targetRoot);
     };
 
@@ -184,7 +180,7 @@ export function activate(context: vscode.ExtensionContext) {
     }));
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('snaptex.internal.revealLine', async (uri: vscode.Uri, index: number, ratio: number, anchor: string, viewRatio: number = 0.5) => {
+        vscode.commands.registerCommand('snaptex.internal.revealLine', async (_uri: vscode.Uri, index: number, ratio: number, anchor: string, viewRatio: number = 0.5) => {
             isSyncingFromPreview = true;
             if (syncLockTimer) { clearTimeout(syncLockTimer); }
             syncLockTimer = setTimeout(() => { isSyncingFromPreview = false; }, 500);
@@ -288,7 +284,7 @@ export function activate(context: vscode.ExtensionContext) {
         }
     }));
 
-    context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(doc => {
+    context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(() => {
         if (vscode.window.activeTextEditor) {updatePreview(false);}
     }));
 
@@ -309,7 +305,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     if (vscode.window.registerWebviewPanelSerializer) {
         context.subscriptions.push(vscode.window.registerWebviewPanelSerializer(TexPreviewPanel.viewType, {
-            async deserializeWebviewPanel(webviewPanel: vscode.WebviewPanel, _state: any) {
+            async deserializeWebviewPanel(webviewPanel: vscode.WebviewPanel, _state: unknown) {
                 TexPreviewPanel.revive(webviewPanel, context.extensionUri, renderer);
             }
         }));

@@ -46,6 +46,11 @@ var SnapTeXWebview = (() => {
   var BLOCK_VIRTUALIZATION_RETAIN_MARGIN = 14e3;
   var BLOCK_VIRTUALIZATION_CLEANUP_DELAY_MS = 700;
   var BLOCK_VIRTUALIZATION_DEFAULT_HEIGHT = 180;
+  function parseFirstElementFromHtml(html) {
+    const tempDiv = document.createElement("div");
+    tempDiv.innerHTML = html;
+    return tempDiv.firstElementChild;
+  }
   var BlockVirtualizationController = class {
     constructor(contentRoot) {
       this.contentRoot = contentRoot;
@@ -87,11 +92,6 @@ var SnapTeXWebview = (() => {
         this.heightCache.set(key, Math.ceil(rect.height));
       }
     }
-    parseBlockHtml(html) {
-      const tempDiv = document.createElement("div");
-      tempDiv.innerHTML = html;
-      return tempDiv.firstElementChild;
-    }
     getAnchorIdsFromBlock(block) {
       if (!block) return [];
       const anchors = /* @__PURE__ */ new Set();
@@ -121,13 +121,11 @@ var SnapTeXWebview = (() => {
       shell.style.height = `${safeHeight}px`;
       shell.style.minHeight = `${safeHeight}px`;
       shell.style.overflow = "hidden";
-      shell._snaptexLastHeight = safeHeight;
     }
     unlockShellHeight(shell) {
       shell.style.height = "";
       shell.style.minHeight = "";
       shell.style.overflow = "";
-      shell._snaptexLastHeight = this.getShellHeightBaseline(shell);
     }
     measureMountedBlockHeight(shell) {
       const block = this.getShellBlock(shell);
@@ -152,7 +150,6 @@ var SnapTeXWebview = (() => {
     }
     observeShell(shell) {
       if (!shell || !this.resizeObserver || this.observedShells.has(shell)) return;
-      shell._snaptexLastHeight = this.getShellHeightBaseline(shell);
       this.observedShells.add(shell);
       this.resizeObserver.observe(shell);
     }
@@ -170,55 +167,41 @@ var SnapTeXWebview = (() => {
       entries.forEach((entry) => {
         const shell = entry.target;
         const nextHeight = entry.contentRect.height;
-        shell._snaptexLastHeight = nextHeight;
         const key = this.getBlockKey(shell);
         if (key && nextHeight > 0) {
           this.heightCache.set(key, Math.ceil(nextHeight));
         }
       });
     }
+    createShell(index, hash, height, anchors) {
+      const shell = document.createElement("div");
+      shell.className = "latex-block-shell";
+      if (index !== null && index !== void 0) {
+        shell.setAttribute("data-index", String(index));
+      }
+      if (hash) {
+        shell.setAttribute("data-block-hash", hash);
+      }
+      shell.setAttribute("data-mounted", "false");
+      this.lockShellHeight(shell, height);
+      this.setShellAnchors(shell, anchors);
+      this.observeShell(shell);
+      return shell;
+    }
     createShellForBlock(block) {
       const index = this.getBlockIndex(block);
       const hash = block.getAttribute("data-block-hash") || "";
       const key = this.getBlockKey(block);
       const html = block.outerHTML;
-      const shell = document.createElement("div");
-      shell.className = "latex-block-shell";
-      if (index !== null) {
-        shell.setAttribute("data-index", index);
-      }
-      if (hash) {
-        shell.setAttribute("data-block-hash", hash);
-      }
-      if (key) {
-        shell.setAttribute("data-block-key", key);
-      }
       this.htmlCache.set(key || index, html);
       const cachedHeight = this.heightCache.get(key);
       const estimatedHeight = cachedHeight || this.estimateBlockHeightFromHtml(html);
-      this.lockShellHeight(shell, estimatedHeight);
-      shell.setAttribute("data-mounted", "false");
-      shell.setAttribute("data-html-loaded", "true");
-      this.setShellAnchors(shell, this.getAnchorIdsFromBlock(block));
-      this.observeShell(shell);
-      return shell;
+      return this.createShell(index, hash, estimatedHeight, this.getAnchorIdsFromBlock(block));
     }
     createShellForMeta(meta) {
-      const shell = document.createElement("div");
-      shell.className = "latex-block-shell";
-      shell.setAttribute("data-index", String(meta.index));
-      shell.setAttribute("data-block-hash", meta.hash);
-      shell.setAttribute("data-block-key", meta.hash || String(meta.index));
-      shell.setAttribute("data-line", String(meta.line ?? 0));
-      shell.setAttribute("data-line-count", String(meta.lineCount ?? 1));
-      shell.setAttribute("data-mounted", "false");
-      shell.setAttribute("data-html-loaded", "false");
       const cachedHeight = this.heightCache.get(meta.hash);
       const estimatedHeight = cachedHeight || this.estimateBlockHeightFromMeta(meta);
-      this.lockShellHeight(shell, estimatedHeight);
-      this.setShellAnchors(shell, meta.anchors);
-      this.observeShell(shell);
-      return shell;
+      return this.createShell(meta.index, meta.hash, estimatedHeight, meta.anchors);
     }
     pruneCaches(activeKeys) {
       const active = new Set(activeKeys.filter(Boolean).map((key) => String(key)));
@@ -261,9 +244,6 @@ var SnapTeXWebview = (() => {
       const rect = shell.getBoundingClientRect();
       return rect.bottom >= -BLOCK_VIRTUALIZATION_RETAIN_MARGIN && rect.top <= window.innerHeight + BLOCK_VIRTUALIZATION_RETAIN_MARGIN;
     }
-    isShellNearViewport(shell, direction = "none") {
-      return this.isShellInMountRange(shell, direction);
-    }
     mountShell(shell, onMissingHtml) {
       if (!this.enabled || this.getShellBlock(shell)) return null;
       const key = this.getBlockKey(shell);
@@ -274,7 +254,7 @@ var SnapTeXWebview = (() => {
         }
         return null;
       }
-      const block = this.parseBlockHtml(html);
+      const block = parseFirstElementFromHtml(html);
       if (!block) return null;
       const reservedHeight = this.getShellHeightBaseline(shell);
       shell.textContent = "";
@@ -285,7 +265,6 @@ var SnapTeXWebview = (() => {
         this.unlockShellHeight(shell);
       }
       shell.setAttribute("data-mounted", "true");
-      shell.setAttribute("data-html-loaded", "true");
       this.setShellAnchors(shell, this.getAnchorIdsFromBlock(block));
       this.refreshMountedShellHeight(shell);
       return block;
@@ -322,23 +301,27 @@ var SnapTeXWebview = (() => {
       });
       return mounted;
     }
-    replaceContentWithShells(blocks, onMount) {
+    replaceContentWithShellElements(shells, onMount, onMissingHtml) {
       const fragment = document.createDocumentFragment();
-      blocks.forEach((block) => fragment.appendChild(this.createShellForBlock(block)));
-      this.pruneCaches(Array.from(fragment.children).map((shell) => this.getBlockKey(shell)));
-      this.disconnectShellObservers();
-      Array.from(fragment.children).forEach((shell) => this.observeShell(shell));
-      this.contentRoot.replaceChildren(fragment);
-      this.updateMountedShells(onMount);
-    }
-    replaceContentWithBlockMetadata(blocks, onMount, onMissingHtml) {
-      const fragment = document.createDocumentFragment();
-      blocks.forEach((meta) => fragment.appendChild(this.createShellForMeta(meta)));
+      shells.forEach((shell) => fragment.appendChild(shell));
       this.pruneCaches(Array.from(fragment.children).map((shell) => this.getBlockKey(shell)));
       this.disconnectShellObservers();
       Array.from(fragment.children).forEach((shell) => this.observeShell(shell));
       this.contentRoot.replaceChildren(fragment);
       this.updateMountedShells(onMount, onMissingHtml);
+    }
+    replaceContentWithShells(blocks, onMount) {
+      this.replaceContentWithShellElements(
+        blocks.map((block) => this.createShellForBlock(block)),
+        onMount
+      );
+    }
+    replaceContentWithBlockMetadata(blocks, onMount, onMissingHtml) {
+      this.replaceContentWithShellElements(
+        blocks.map((meta) => this.createShellForMeta(meta)),
+        onMount,
+        onMissingHtml
+      );
     }
     storeBlockHtml(index, hash, html) {
       const key = hash || String(index);
@@ -347,8 +330,6 @@ var SnapTeXWebview = (() => {
       const shellHash = shell.getAttribute("data-block-hash") || "";
       if (hash && shellHash && shellHash !== hash) return null;
       this.htmlCache.set(key, html);
-      shell.removeAttribute("data-html-requested");
-      shell.setAttribute("data-html-loaded", "true");
       return shell;
     }
     remapShellIndices(start, delta) {
@@ -463,7 +444,6 @@ var SnapTeXWebview = (() => {
     root.querySelectorAll(".tikz-container").forEach((container) => {
       if (hasRenderedTikz(container) || container.getAttribute("data-tikz-state") === "failed") return;
       setTikzContainerState(container, "queued");
-      container.setAttribute("data-tikz-watchdog", "true");
     });
   };
   window.activatePendingTikzScripts = function(root = document) {
@@ -513,7 +493,6 @@ var SnapTeXWebview = (() => {
   };
   var ExtensionToWebviewCommand = {
     Update: "update",
-    UpdateBinary: "update_binary",
     ScrollToBlock: "scrollToBlock",
     PdfUri: "pdfUri",
     BlockHtml: "blockHtml",
@@ -527,7 +506,6 @@ var SnapTeXWebview = (() => {
   var PDF_RELEASE_MARGIN = 3600;
   window.pdfReqQueue = [];
   window.renderPdfToCanvas = function(path, canvasId) {
-    console.log(`[SnapTeX] Queueing PDF request for ${canvasId}`);
     window.pdfReqQueue.push({ path, canvasId });
   };
   var TooltipManager = class {
@@ -556,8 +534,6 @@ var SnapTeXWebview = (() => {
           this.onLinkLeave();
         }
       });
-      window.addEventListener("mousemove", (e) => this.broadcastMouseMove(e));
-      window.addEventListener("mouseup", () => this.broadcastMouseUp());
     }
     onLinkEnter(link) {
       if (!this.activeTransientTooltip || this.activeTransientTooltip.isPinned) {
@@ -572,10 +548,6 @@ var SnapTeXWebview = (() => {
     }
     getTopZIndex() {
       return ++this.zIndexCounter;
-    }
-    broadcastMouseMove(e) {
-    }
-    broadcastMouseUp() {
     }
   };
   var Tooltip = class {
@@ -796,9 +768,9 @@ var SnapTeXWebview = (() => {
       });
     }
     async resolveContextBlocks(container) {
-      const controller2 = window.snaptexPreviewController;
-      if (controller2 && typeof controller2.getTooltipContextBlocks === "function") {
-        return await controller2.getTooltipContextBlocks(container);
+      const controller = window.snaptexPreviewController;
+      if (controller && typeof controller.getTooltipContextBlocks === "function") {
+        return await controller.getTooltipContextBlocks(container);
       }
       return [container.previousElementSibling, container, container.nextElementSibling].filter((block) => block && block.classList.contains("latex-block"));
     }
@@ -811,9 +783,9 @@ var SnapTeXWebview = (() => {
     async resolveTargetElement(targetId) {
       const existing = document.getElementById(targetId);
       if (existing) return existing;
-      const controller2 = window.snaptexPreviewController;
-      if (controller2 && typeof controller2.ensureAnchorMounted === "function") {
-        return await controller2.ensureAnchorMounted(targetId);
+      const controller = window.snaptexPreviewController;
+      if (controller && typeof controller.ensureAnchorMounted === "function") {
+        return await controller.ensureAnchorMounted(targetId);
       }
       return null;
     }
@@ -865,8 +837,6 @@ var SnapTeXWebview = (() => {
       this.scrollTimeout = null;
       this.pendingScroll = null;
       this.isFirstLoad = true;
-      this.lastTargetIndex = -1;
-      this.lastTargetRatio = 0;
       this.lastScrollTime = 0;
       this.scrollCommandSeq = 0;
       this.lastVirtualScrollY = window.scrollY;
@@ -893,7 +863,7 @@ var SnapTeXWebview = (() => {
           console.warn("[SnapTeX] Failed to render TikZ preview content.", error);
         }
       });
-      this.tooltipManager = new TooltipManager();
+      new TooltipManager();
       this.initPdfObserver();
       this.bindEvents();
       vscode.postMessage({ command: WebviewToExtensionCommand.WebviewLoaded });
@@ -910,36 +880,19 @@ var SnapTeXWebview = (() => {
       document.addEventListener("dblclick", (event) => this.onDoubleClick(event));
       document.addEventListener("click", (event) => this.onInternalLinkClick(event));
     }
-    setState(newState) {
-      this.state = newState;
-    }
     lockScrolling(duration) {
-      this.setState("SCROLLING_AUTO");
+      this.state = "SCROLLING_AUTO";
       if (this.scrollTimeout) clearTimeout(this.scrollTimeout);
       this.scrollTimeout = setTimeout(() => {
         if (this.state === "SCROLLING_AUTO") {
-          this.setState("IDLE");
+          this.state = "IDLE";
         }
       }, duration);
     }
     onMessage(event) {
-      const { command, payload, binaryData } = event.data;
+      const { command, payload } = event.data;
       switch (command) {
         case ExtensionToWebviewCommand.Update:
-          this.handleUpdate(payload);
-          break;
-        case ExtensionToWebviewCommand.UpdateBinary:
-          let u8array;
-          if (binaryData instanceof Uint8Array) {
-            u8array = binaryData;
-          } else if (binaryData && binaryData.type === "Buffer") {
-            u8array = new Uint8Array(binaryData.data);
-          } else {
-            u8array = new Uint8Array(binaryData);
-          }
-          const decoder = new TextDecoder("utf-8");
-          const htmlString = decoder.decode(u8array);
-          payload.html = htmlString;
           this.handleUpdate(payload);
           break;
         case ExtensionToWebviewCommand.ScrollToBlock:
@@ -966,15 +919,13 @@ var SnapTeXWebview = (() => {
         this.currentNumbering = payload.numbering;
       }
       if (payload.type === "full") {
-        this.setState("RENDERING");
+        this.state = "RENDERING";
         const scrollState = this.saveScrollState();
         document.body.classList.add("preload-mode");
         if (payload.blocks && this.virtualization.isEnabled()) {
-          this.smartFullUpdateFromBlockMetadata(payload.blocks, payload.preserveUnchangedBlocks !== false);
+          this.smartFullUpdateFromBlockMetadata(payload.blocks);
         } else if (payload.htmls) {
           this.smartFullUpdateFromBlocks(payload.htmls, payload.preserveUnchangedBlocks !== false);
-        } else {
-          this.smartFullUpdate(payload.html, payload.preserveUnchangedBlocks !== false);
         }
         this.logDomStats("after full update");
         document.fonts.ready.then(() => {
@@ -1036,14 +987,19 @@ var SnapTeXWebview = (() => {
         setTikzContainerState(container, "stale");
       });
     }
-    applyStaleTikzPreviewsToBlock(newBlock, oldBlock) {
-      const previews = this.collectTikzPreviews(oldBlock);
-      this.attachStaleTikzPreviews(newBlock, previews);
-    }
     replaceBlockPreservingTikz(oldBlock, newBlock) {
       this.virtualization.rememberBlockHeight(oldBlock);
       oldBlock.replaceWith(newBlock);
-      this.applyStaleTikzPreviewsToBlock(newBlock, oldBlock);
+      this.attachStaleTikzPreviews(newBlock, this.collectTikzPreviews(oldBlock));
+    }
+    rememberStaleTikzPreviews(element, staleTikzByIndex) {
+      if (!element) return;
+      const index = element.getAttribute("data-index");
+      const previews = this.collectTikzPreviews(element);
+      this.virtualization.rememberBlockHeight(element);
+      if (index !== null && previews.some(Boolean)) {
+        staleTikzByIndex.set(index, previews);
+      }
     }
     onVirtualBlockMounted(block) {
       if (!block) return;
@@ -1215,7 +1171,6 @@ var SnapTeXWebview = (() => {
       const hash = shell.getAttribute("data-block-hash") || "";
       if (Number.isNaN(index)) return false;
       const id = `block-${++this.blockHtmlRequestSeq}`;
-      shell.setAttribute("data-html-requested", "true");
       shell.setAttribute("data-html-request-id", id);
       this.pendingBlockHtmlRequests.set(id, {
         index,
@@ -1235,7 +1190,6 @@ var SnapTeXWebview = (() => {
         const index2 = pending?.index ?? message.index;
         const shell2 = this.getShellByIndex(index2);
         if (shell2) {
-          shell2.removeAttribute("data-html-requested");
           shell2.removeAttribute("data-html-request-id");
         }
         pending?.callbacks?.forEach((callback) => callback(null));
@@ -1251,7 +1205,7 @@ var SnapTeXWebview = (() => {
         pending?.callbacks?.forEach((callback) => callback(null));
         return;
       }
-      if (!pending?.forceMount && !this.virtualization.isShellNearViewport(shell, this.scrollDirection)) return;
+      if (!pending?.forceMount && !this.virtualization.isShellInMountRange(shell, this.scrollDirection)) return;
       const block = this.virtualization.mountShell(
         shell,
         (missingShell) => this.requestVirtualBlockHtml(missingShell)
@@ -1304,7 +1258,9 @@ var SnapTeXWebview = (() => {
       await window.ensureTikzJaxLoaded();
       const containers = this.getPendingTikzContainers(this.contentRoot);
       if (containers.length === 0 || window.tikzJaxFailed) return;
-      console.log("[SnapTeX] Loading TikZJax for TikZ content...");
+      if (this.config.debugMemory) {
+        console.log("[SnapTeX] Loading TikZJax for TikZ content...");
+      }
       window.watchPendingTikzContainers(this.contentRoot);
       const activated = window.activatePendingTikzScripts(this.contentRoot);
       if (activated === 0) return;
@@ -1318,7 +1274,7 @@ var SnapTeXWebview = (() => {
       this.tikzRenderScheduler.request();
     }
     onRenderComplete(savedScrollState) {
-      this.setState("IDLE");
+      this.state = "IDLE";
       document.body.classList.remove("preload-mode");
       let scrollHandled = false;
       if (this.pendingScroll) {
@@ -1330,11 +1286,6 @@ var SnapTeXWebview = (() => {
         scrollHandled = true;
       }
       this.isFirstLoad = false;
-      if (!scrollHandled && this.state === "SCROLLING_AUTO") {
-        this.lockScrolling(200);
-      } else if (!scrollHandled) {
-        this.setState("IDLE");
-      }
       this.schedulePendingPdfRender();
     }
     handleScrollCommand(data) {
@@ -1405,7 +1356,7 @@ var SnapTeXWebview = (() => {
       for (const block of blocks) {
         const rect = block.getBoundingClientRect();
         if (rect.bottom > 0 && rect.top < window.innerHeight) {
-          return { index: block.getAttribute("data-index"), ratio: -rect.top / rect.height, offset: -rect.top };
+          return { index: block.getAttribute("data-index"), ratio: -rect.top / rect.height };
         }
       }
       return null;
@@ -1423,8 +1374,6 @@ var SnapTeXWebview = (() => {
     async executeScroll(data) {
       const { index, ratio, anchor, auto, viewRatio = 0.5 } = data;
       const scrollSeq = ++this.scrollCommandSeq;
-      this.lastTargetIndex = index;
-      this.lastTargetRatio = ratio || 0;
       const mountResult = await this.ensureBlockMountedByIndex(index);
       if (scrollSeq !== this.scrollCommandSeq) return;
       const target = mountResult.target;
@@ -1469,22 +1418,11 @@ var SnapTeXWebview = (() => {
       if (!oldHash || !newHash) return true;
       return oldHash !== newHash;
     }
-    smartFullUpdate(newHtml, preserveUnchangedBlocks = true) {
-      const parser = new DOMParser();
-      const newDoc = parser.parseFromString(newHtml, "text/html");
-      const newElements = Array.from(newDoc.body.children);
-      this.smartFullUpdateElements(newElements, preserveUnchangedBlocks);
-    }
-    parseBlockHtml(html) {
-      const tempDiv = document.createElement("div");
-      tempDiv.innerHTML = html;
-      return tempDiv.firstElementChild;
-    }
     smartFullUpdateFromBlocks(htmls, preserveUnchangedBlocks = true) {
-      const newElements = htmls.map((html) => this.parseBlockHtml(html)).filter(Boolean);
+      const newElements = htmls.map((html) => parseFirstElementFromHtml(html)).filter(Boolean);
       this.smartFullUpdateElements(newElements, preserveUnchangedBlocks);
     }
-    smartFullUpdateFromBlockMetadata(blocks, preserveUnchangedBlocks = true) {
+    smartFullUpdateFromBlockMetadata(blocks) {
       this.virtualization.replaceContentWithBlockMetadata(
         blocks,
         (block) => this.onVirtualBlockMounted(block),
@@ -1529,12 +1467,7 @@ var SnapTeXWebview = (() => {
       const staleTikzByIndex = /* @__PURE__ */ new Map();
       for (let i = 0; i < deleteCount; i++) {
         const block = this.contentRoot.children[start + i];
-        const index = block?.getAttribute("data-index");
-        const previews = this.collectTikzPreviews(block);
-        this.virtualization.rememberBlockHeight(block);
-        if (index !== null && previews.some(Boolean)) {
-          staleTikzByIndex.set(index, previews);
-        }
+        this.rememberStaleTikzPreviews(block, staleTikzByIndex);
       }
       const insertedBlocks = [];
       for (let i = 0; i < deleteCount; i++) {
@@ -1542,10 +1475,8 @@ var SnapTeXWebview = (() => {
       }
       if (htmls.length > 0) {
         const fragment = document.createDocumentFragment();
-        const tempDiv = document.createElement("div");
         htmls.forEach((html) => {
-          tempDiv.innerHTML = html;
-          const node = tempDiv.firstElementChild;
+          const node = parseFirstElementFromHtml(html);
           if (node) {
             insertedBlocks.push(node);
             fragment.appendChild(node);
@@ -1572,9 +1503,7 @@ var SnapTeXWebview = (() => {
           const idx = parseInt(indexStr);
           const targetBlock = this.getBlockByIndex(idx);
           if (targetBlock) {
-            const tempDiv = document.createElement("div");
-            tempDiv.innerHTML = payload.dirtyBlocks[idx];
-            const replacement = tempDiv.firstElementChild;
+            const replacement = parseFirstElementFromHtml(payload.dirtyBlocks[idx]);
             if (replacement) {
               this.replaceBlockPreservingTikz(targetBlock, replacement);
             }
@@ -1590,20 +1519,13 @@ var SnapTeXWebview = (() => {
       for (let i = 0; i < deleteCount; i++) {
         const shell = this.contentRoot.children[start];
         if (!shell) break;
-        const index = shell.getAttribute("data-index");
-        const previews = this.collectTikzPreviews(shell);
-        if (index !== null && previews.some(Boolean)) {
-          staleTikzByIndex.set(index, previews);
-        }
-        this.virtualization.rememberBlockHeight(shell);
+        this.rememberStaleTikzPreviews(shell, staleTikzByIndex);
         this.virtualization.unobserveShell(shell);
         shell.remove();
       }
-      const tempDiv = document.createElement("div");
       const insertedShells = [];
       htmls.forEach((html) => {
-        tempDiv.innerHTML = html;
-        const block = tempDiv.firstElementChild;
+        const block = parseFirstElementFromHtml(html);
         if (!block) return;
         const shell = this.virtualization.createShellForBlock(block);
         const index = block.getAttribute("data-index");
@@ -1623,9 +1545,7 @@ var SnapTeXWebview = (() => {
           const idx = parseInt(indexStr);
           const shell = this.getShellByIndex(idx);
           if (!shell) return;
-          const temp = document.createElement("div");
-          temp.innerHTML = payload.dirtyBlocks[idx];
-          const replacement = temp.firstElementChild;
+          const replacement = parseFirstElementFromHtml(payload.dirtyBlocks[idx]);
           if (!replacement) return;
           const previews = this.collectTikzPreviews(shell);
           const newShell = this.virtualization.createShellForBlock(replacement);
@@ -1744,38 +1664,7 @@ var SnapTeXWebview = (() => {
         }
       });
     }
-    highlightTextInNode(rootElement, text) {
-      if (!text || text.length < 3) return false;
-      const walker = document.createTreeWalker(rootElement, NodeFilter.SHOW_TEXT, {
-        acceptNode: (node2) => {
-          if (node2.parentElement && node2.parentElement.closest(".katex")) return NodeFilter.FILTER_REJECT;
-          return NodeFilter.FILTER_ACCEPT;
-        }
-      });
-      let node;
-      while (node = walker.nextNode()) {
-        const val = node.nodeValue;
-        const index = val.indexOf(text);
-        if (index >= 0) {
-          const range = document.createRange();
-          range.setStart(node, index);
-          range.setEnd(node, index + text.length);
-          const span = document.createElement("span");
-          span.className = "highlight-word";
-          range.surroundContents(span);
-          setTimeout(() => {
-            const parent = span.parentNode;
-            if (parent) {
-              parent.replaceChild(document.createTextNode(span.textContent), span);
-              parent.normalize();
-            }
-          }, 2e3);
-          return true;
-        }
-      }
-      return false;
-    }
-    findTextOffsetInBlock(rootElement, text) {
+    findTextRangeInNode(rootElement, text) {
       if (!text || text.length < 3) return null;
       const walker = document.createTreeWalker(rootElement, NodeFilter.SHOW_TEXT, {
         acceptNode: (node2) => {
@@ -1791,13 +1680,31 @@ var SnapTeXWebview = (() => {
           const range = document.createRange();
           range.setStart(node, index);
           range.setEnd(node, index + text.length);
-          const rect = range.getBoundingClientRect();
-          return rect.top;
+          return range;
         }
       }
       return null;
     }
+    highlightTextInNode(rootElement, text) {
+      const range = this.findTextRangeInNode(rootElement, text);
+      if (!range) return false;
+      const span = document.createElement("span");
+      span.className = "highlight-word";
+      range.surroundContents(span);
+      setTimeout(() => {
+        const parent = span.parentNode;
+        if (parent) {
+          parent.replaceChild(document.createTextNode(span.textContent), span);
+          parent.normalize();
+        }
+      }, 2e3);
+      return true;
+    }
+    findTextOffsetInBlock(rootElement, text) {
+      const range = this.findTextRangeInNode(rootElement, text);
+      return range ? range.getBoundingClientRect().top : null;
+    }
   };
-  var controller = new PreviewController();
+  new PreviewController();
 })();
 //# sourceMappingURL=webview-main.js.map

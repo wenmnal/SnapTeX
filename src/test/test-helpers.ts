@@ -20,10 +20,6 @@ export class MemoryFileProvider implements IFileProvider {
         return content;
     }
 
-    async readBuffer(uri: vscode.Uri): Promise<Uint8Array> {
-        return new TextEncoder().encode(await this.read(uri));
-    }
-
     async exists(uri: vscode.Uri): Promise<boolean> {
         return this.files.has(normalizeUri(uri));
     }

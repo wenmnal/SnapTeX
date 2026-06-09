@@ -1,7 +1,7 @@
 // @ts-nocheck
 /* eslint-disable curly */
 import { CoalescingTaskScheduler } from './scheduler';
-import { BLOCK_VIRTUALIZATION_CLEANUP_DELAY_MS, BlockVirtualizationController } from './virtualization';
+import { BLOCK_VIRTUALIZATION_CLEANUP_DELAY_MS, BlockVirtualizationController, parseFirstElementFromHtml } from './virtualization';
 import { hasRenderedTikz, setTikzContainerState, TIKZ_BATCH_RENDER_TIMEOUT_MS, TIKZ_RENDER_DEBOUNCE_MS, TIKZ_SCRIPT_SELECTOR } from './tikz';
 import { ExtensionToWebviewCommand, WebviewToExtensionCommand } from '../webview-messages';
 const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
@@ -10,7 +10,6 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
     const PDF_RELEASE_MARGIN = 3600;
     window.pdfReqQueue = [];
     window.renderPdfToCanvas = function(path, canvasId) {
-        console.log(`[SnapTeX] Queueing PDF request for ${canvasId}`);
         window.pdfReqQueue.push({ path, canvasId });
     };
 
@@ -47,8 +46,6 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                 }
             });
 
-            window.addEventListener('mousemove', (e) => this.broadcastMouseMove(e));
-            window.addEventListener('mouseup', () => this.broadcastMouseUp());
         }
 
         onLinkEnter(link) {
@@ -69,11 +66,6 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             return ++this.zIndexCounter;
         }
 
-        broadcastMouseMove(e) {
-        }
-
-        broadcastMouseUp() {
-        }
     }
 
     /**
@@ -422,8 +414,6 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             this.scrollTimeout = null;
             this.pendingScroll = null;
             this.isFirstLoad = true;
-            this.lastTargetIndex = -1;
-            this.lastTargetRatio = 0;
             this.lastScrollTime = 0;
             this.scrollCommandSeq = 0;
             this.lastVirtualScrollY = window.scrollY;
@@ -451,7 +441,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                 }
             });
 
-            this.tooltipManager = new TooltipManager();
+            new TooltipManager();
 
             this.initPdfObserver();
             this.bindEvents();
@@ -471,38 +461,18 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             document.addEventListener('click', event => this.onInternalLinkClick(event));
         }
 
-        setState(newState) { this.state = newState; }
-
         lockScrolling(duration) {
-            this.setState('SCROLLING_AUTO');
+            this.state = 'SCROLLING_AUTO';
             if (this.scrollTimeout) clearTimeout(this.scrollTimeout);
             this.scrollTimeout = setTimeout(() => {
-                if (this.state === 'SCROLLING_AUTO') { this.setState('IDLE'); }
+                if (this.state === 'SCROLLING_AUTO') { this.state = 'IDLE'; }
             }, duration);
         }
 
         onMessage(event) {
-            const { command, payload, binaryData } = event.data;
+            const { command, payload } = event.data;
             switch (command) {
                 case ExtensionToWebviewCommand.Update:
-                    this.handleUpdate(payload);
-                    break;
-
-                case ExtensionToWebviewCommand.UpdateBinary:
-                    let u8array;
-                    if (binaryData instanceof Uint8Array) {
-                        u8array = binaryData;
-                    } else if (binaryData && binaryData.type === 'Buffer') {
-                        u8array = new Uint8Array(binaryData.data);
-                    } else {
-                        u8array = new Uint8Array(binaryData);
-                    }
-
-                    const decoder = new TextDecoder('utf-8');
-                    const htmlString = decoder.decode(u8array);
-
-                    payload.html = htmlString;
-
                     this.handleUpdate(payload);
                     break;
 
@@ -533,15 +503,13 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                 this.currentNumbering = payload.numbering;
             }
             if (payload.type === 'full') {
-                this.setState('RENDERING');
+                this.state = 'RENDERING';
                 const scrollState = this.saveScrollState();
                 document.body.classList.add('preload-mode');
                 if (payload.blocks && this.virtualization.isEnabled()) {
-                    this.smartFullUpdateFromBlockMetadata(payload.blocks, payload.preserveUnchangedBlocks !== false);
+                    this.smartFullUpdateFromBlockMetadata(payload.blocks);
                 } else if (payload.htmls) {
                     this.smartFullUpdateFromBlocks(payload.htmls, payload.preserveUnchangedBlocks !== false);
-                } else {
-                    this.smartFullUpdate(payload.html, payload.preserveUnchangedBlocks !== false);
                 }
                 this.logDomStats('after full update');
                 document.fonts.ready.then(() => {
@@ -610,15 +578,20 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             });
         }
 
-        applyStaleTikzPreviewsToBlock(newBlock, oldBlock) {
-            const previews = this.collectTikzPreviews(oldBlock);
-            this.attachStaleTikzPreviews(newBlock, previews);
-        }
-
         replaceBlockPreservingTikz(oldBlock, newBlock) {
             this.virtualization.rememberBlockHeight(oldBlock);
             oldBlock.replaceWith(newBlock);
-            this.applyStaleTikzPreviewsToBlock(newBlock, oldBlock);
+            this.attachStaleTikzPreviews(newBlock, this.collectTikzPreviews(oldBlock));
+        }
+
+        rememberStaleTikzPreviews(element, staleTikzByIndex) {
+            if (!element) return;
+            const index = element.getAttribute('data-index');
+            const previews = this.collectTikzPreviews(element);
+            this.virtualization.rememberBlockHeight(element);
+            if (index !== null && previews.some(Boolean)) {
+                staleTikzByIndex.set(index, previews);
+            }
         }
 
         onVirtualBlockMounted(block) {
@@ -824,7 +797,6 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             if (Number.isNaN(index)) return false;
 
             const id = `block-${++this.blockHtmlRequestSeq}`;
-            shell.setAttribute('data-html-requested', 'true');
             shell.setAttribute('data-html-request-id', id);
             this.pendingBlockHtmlRequests.set(id, {
                 index,
@@ -845,7 +817,6 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                 const index = pending?.index ?? message.index;
                 const shell = this.getShellByIndex(index);
                 if (shell) {
-                    shell.removeAttribute('data-html-requested');
                     shell.removeAttribute('data-html-request-id');
                 }
                 pending?.callbacks?.forEach(callback => callback(null));
@@ -862,7 +833,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                 pending?.callbacks?.forEach(callback => callback(null));
                 return;
             }
-            if (!pending?.forceMount && !this.virtualization.isShellNearViewport(shell, this.scrollDirection)) return;
+            if (!pending?.forceMount && !this.virtualization.isShellInMountRange(shell, this.scrollDirection)) return;
 
             const block = this.virtualization.mountShell(
                 shell,
@@ -926,7 +897,9 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             const containers = this.getPendingTikzContainers(this.contentRoot);
             if (containers.length === 0 || window.tikzJaxFailed) return;
 
-            console.log('[SnapTeX] Loading TikZJax for TikZ content...');
+            if (this.config.debugMemory) {
+                console.log('[SnapTeX] Loading TikZJax for TikZ content...');
+            }
             window.watchPendingTikzContainers(this.contentRoot);
             const activated = window.activatePendingTikzScripts(this.contentRoot);
             if (activated === 0) return;
@@ -943,7 +916,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
         }
 
         onRenderComplete(savedScrollState) {
-            this.setState('IDLE');
+            this.state = 'IDLE';
             document.body.classList.remove('preload-mode');
             let scrollHandled = false;
             if (this.pendingScroll) {
@@ -955,8 +928,6 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                 scrollHandled = true;
             }
             this.isFirstLoad = false;
-            if (!scrollHandled && this.state === 'SCROLLING_AUTO') { this.lockScrolling(200); }
-            else if (!scrollHandled) { this.setState('IDLE'); }
             this.schedulePendingPdfRender();
         }
 
@@ -1022,7 +993,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             for (const block of blocks) {
                 const rect = block.getBoundingClientRect();
                 if (rect.bottom > 0 && rect.top < window.innerHeight) {
-                    return { index: block.getAttribute('data-index'), ratio: -rect.top / rect.height, offset: -rect.top };
+                    return { index: block.getAttribute('data-index'), ratio: -rect.top / rect.height };
                 }
             }
             return null;
@@ -1042,8 +1013,6 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
         async executeScroll(data) {
             const { index, ratio, anchor, auto, viewRatio = 0.5 } = data;
             const scrollSeq = ++this.scrollCommandSeq;
-            this.lastTargetIndex = index;
-            this.lastTargetRatio = ratio || 0;
 
             const mountResult = await this.ensureBlockMountedByIndex(index);
             if (scrollSeq !== this.scrollCommandSeq) return;
@@ -1090,27 +1059,14 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             return oldHash !== newHash;
         }
 
-        smartFullUpdate(newHtml, preserveUnchangedBlocks = true) {
-            const parser = new DOMParser();
-            const newDoc = parser.parseFromString(newHtml, 'text/html');
-            const newElements = Array.from(newDoc.body.children);
-            this.smartFullUpdateElements(newElements, preserveUnchangedBlocks);
-        }
-
-        parseBlockHtml(html) {
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = html;
-            return tempDiv.firstElementChild;
-        }
-
         smartFullUpdateFromBlocks(htmls, preserveUnchangedBlocks = true) {
             const newElements = htmls
-                .map(html => this.parseBlockHtml(html))
+                .map(html => parseFirstElementFromHtml(html))
                 .filter(Boolean);
             this.smartFullUpdateElements(newElements, preserveUnchangedBlocks);
         }
 
-        smartFullUpdateFromBlockMetadata(blocks, preserveUnchangedBlocks = true) {
+        smartFullUpdateFromBlockMetadata(blocks) {
             this.virtualization.replaceContentWithBlockMetadata(
                 blocks,
                 block => this.onVirtualBlockMounted(block),
@@ -1157,12 +1113,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
 
             for (let i = 0; i < deleteCount; i++) {
                 const block = this.contentRoot.children[start + i];
-                const index = block?.getAttribute('data-index');
-                const previews = this.collectTikzPreviews(block);
-                this.virtualization.rememberBlockHeight(block);
-                if (index !== null && previews.some(Boolean)) {
-                    staleTikzByIndex.set(index, previews);
-                }
+                this.rememberStaleTikzPreviews(block, staleTikzByIndex);
             }
 
             const insertedBlocks = [];
@@ -1171,10 +1122,8 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             }
             if (htmls.length > 0) {
                 const fragment = document.createDocumentFragment();
-                const tempDiv = document.createElement('div');
                 htmls.forEach(html => {
-                    tempDiv.innerHTML = html;
-                    const node = tempDiv.firstElementChild;
+                    const node = parseFirstElementFromHtml(html);
                     if (node) {
                         insertedBlocks.push(node);
                         fragment.appendChild(node);
@@ -1199,9 +1148,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                     const idx = parseInt(indexStr);
                     const targetBlock = this.getBlockByIndex(idx);
                     if (targetBlock) {
-                        const tempDiv = document.createElement('div');
-                        tempDiv.innerHTML = payload.dirtyBlocks[idx];
-                        const replacement = tempDiv.firstElementChild;
+                        const replacement = parseFirstElementFromHtml(payload.dirtyBlocks[idx]);
                         if (replacement) {
                             this.replaceBlockPreservingTikz(targetBlock, replacement);
                         }
@@ -1219,21 +1166,14 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             for (let i = 0; i < deleteCount; i++) {
                 const shell = this.contentRoot.children[start];
                 if (!shell) break;
-                const index = shell.getAttribute('data-index');
-                const previews = this.collectTikzPreviews(shell);
-                if (index !== null && previews.some(Boolean)) {
-                    staleTikzByIndex.set(index, previews);
-                }
-                this.virtualization.rememberBlockHeight(shell);
+                this.rememberStaleTikzPreviews(shell, staleTikzByIndex);
                 this.virtualization.unobserveShell(shell);
                 shell.remove();
             }
 
-            const tempDiv = document.createElement('div');
             const insertedShells = [];
             htmls.forEach(html => {
-                tempDiv.innerHTML = html;
-                const block = tempDiv.firstElementChild;
+                const block = parseFirstElementFromHtml(html);
                 if (!block) return;
 
                 const shell = this.virtualization.createShellForBlock(block);
@@ -1258,9 +1198,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                     const shell = this.getShellByIndex(idx);
                     if (!shell) return;
 
-                    const temp = document.createElement('div');
-                    temp.innerHTML = payload.dirtyBlocks[idx];
-                    const replacement = temp.firstElementChild;
+                    const replacement = parseFirstElementFromHtml(payload.dirtyBlocks[idx]);
                     if (!replacement) return;
 
                     const previews = this.collectTikzPreviews(shell);
@@ -1384,39 +1322,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             });
         }
 
-        highlightTextInNode(rootElement, text) {
-            if (!text || text.length < 3) return false;
-            const walker = document.createTreeWalker(rootElement, NodeFilter.SHOW_TEXT, {
-                acceptNode: (node) => {
-                    if (node.parentElement && node.parentElement.closest('.katex')) return NodeFilter.FILTER_REJECT;
-                    return NodeFilter.FILTER_ACCEPT;
-                }
-            });
-            let node;
-            while (node = walker.nextNode()) {
-                const val = node.nodeValue;
-                const index = val.indexOf(text);
-                if (index >= 0) {
-                    const range = document.createRange();
-                    range.setStart(node, index);
-                    range.setEnd(node, index + text.length);
-                    const span = document.createElement('span');
-                    span.className = 'highlight-word';
-                    range.surroundContents(span);
-                    setTimeout(() => {
-                        const parent = span.parentNode;
-                        if (parent) {
-                            parent.replaceChild(document.createTextNode(span.textContent), span);
-                            parent.normalize();
-                        }
-                    }, 2000);
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        findTextOffsetInBlock(rootElement, text) {
+        findTextRangeInNode(rootElement, text) {
             if (!text || text.length < 3) return null;
             const walker = document.createTreeWalker(rootElement, NodeFilter.SHOW_TEXT, {
                 acceptNode: (node) => {
@@ -1432,15 +1338,35 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                     const range = document.createRange();
                     range.setStart(node, index);
                     range.setEnd(node, index + text.length);
-                    const rect = range.getBoundingClientRect();
-                    return rect.top;
+                    return range;
                 }
             }
             return null;
         }
+
+        highlightTextInNode(rootElement, text) {
+            const range = this.findTextRangeInNode(rootElement, text);
+            if (!range) return false;
+            const span = document.createElement('span');
+            span.className = 'highlight-word';
+            range.surroundContents(span);
+            setTimeout(() => {
+                const parent = span.parentNode;
+                if (parent) {
+                    parent.replaceChild(document.createTextNode(span.textContent), span);
+                    parent.normalize();
+                }
+            }, 2000);
+            return true;
+        }
+
+        findTextOffsetInBlock(rootElement, text) {
+            const range = this.findTextRangeInNode(rootElement, text);
+            return range ? range.getBoundingClientRect().top : null;
+        }
     }
 
-    const controller = new PreviewController();
+    new PreviewController();
 
 
 
