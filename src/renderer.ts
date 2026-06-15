@@ -5,7 +5,7 @@ import { BlockNumberingCounts, BlockTextSnapshot, MathRendererType, NumberingPay
 import { resetMathJax, getMathJaxCSS as getMathJaxCSSFromRenderer } from './mathjax-renderer';
 import { DEFAULT_PREPROCESS_RULES, postProcessHtml } from './rules';
 import { LatexCounterScanner } from './scanner';
-import { R_BIBLIOGRAPHY } from './patterns';
+import { R_BIBLIOGRAPHY, R_ADDBIBRESOURCE } from './patterns';
 import { extractLatexCitationKeys, extractLatexLabelNames, normalizeUri, stableHash } from './utils';
 import { ProtectionManager } from './protection';
 
@@ -177,7 +177,7 @@ export class SmartRenderer {
             line: map?.start ?? 0,
             lineCount: map?.count ?? text.split(/\r?\n/).length,
             anchors: Array.from(new Set(extractLatexLabelNames(text))),
-            hasBibliography: R_BIBLIOGRAPHY.test(text),
+            hasBibliography: R_BIBLIOGRAPHY.test(text) || R_ADDBIBRESOURCE.test(text),
             citationKeys: extractLatexCitationKeys(text)
         };
     }

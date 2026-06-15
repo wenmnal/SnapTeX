@@ -3,7 +3,7 @@ import { IFileProvider } from './file-provider';
 import { extractMetadata } from './metadata';
 import { BibTexParser } from './bib';
 import { BibEntry, SourceLocation, PreambleData, MetadataResult, BlockTextSnapshot, BlockTextSpan, RenderDocumentView } from './types';
-import { R_BIBLIOGRAPHY } from './patterns';
+import { R_BIBLIOGRAPHY, R_ADDBIBRESOURCE } from './patterns';
 import { LatexBlockSplitter } from './splitter';
 import { normalizeUri, scanLatexBraceBalance, stableHash } from './utils';
 
@@ -312,7 +312,13 @@ export class LatexDocument implements RenderDocumentView {
     }
 
     private async loadBibliography(text: string, rootDir: vscode.Uri): Promise<Map<string, BibEntry>> {
-        const match = text.match(R_BIBLIOGRAPHY);
+        // Try biblatex \addbibresource{ref.bib} first
+        let match = text.match(R_ADDBIBRESOURCE);
+        if (!match) {
+            // Fallback to bibtex \bibliography{ref}
+            match = text.match(R_BIBLIOGRAPHY);
+        }
+
         if (match) {
             let bibFile = match[1].trim();
             if (!bibFile.endsWith('.bib')) { bibFile += '.bib'; }

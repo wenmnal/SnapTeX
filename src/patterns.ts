@@ -42,11 +42,15 @@ const SPLITTER_IGNORED_ENVS = [
     'proof', 'itemize', 'enumerate'
 ];
 
+const BEAMER_BLOCK_ENVS = ['block', 'alertblock', 'exampleblock'];
+
 const SPLITTER_MAJOR_ENVS = [
     ...MATH_ENVS,
     ...FLOAT_ENVS,
     ...THEOREM_ENVS,
-    'tikzpicture'
+    ...BEAMER_BLOCK_ENVS,
+    'tikzpicture',
+    'frame'
 ];
 
 const join = (arr: readonly string[]) => arr.join('|');
@@ -60,6 +64,7 @@ export const REGEX_STR = {
     MATH_ENVS: join(MATH_ENVS),
     FLOAT_ENVS: join(FLOAT_ENVS),
     THEOREM_ENVS: join(THEOREM_ENVS),
+    BEAMER_BLOCK_ENVS: join(BEAMER_BLOCK_ENVS),
     SECTION_LEVELS: join(SECTION_LEVELS),
     CITATION_CMDS: join(CITATION_CMDS),
     SPLITTER_IGNORED: join(SPLITTER_IGNORED_ENVS),
@@ -73,6 +78,8 @@ export const R_CREF = /\\(cref|Cref)\*?\{([^}]+)\}/g;
 export const R_CREFRANGE = /\\(crefrange|Crefrange)\*?\{([^}]+)\}\{([^}]+)\}/g;
 
 export const R_BIBLIOGRAPHY = /\\bibliography\{([^}]+)\}/;
+
+export const R_ADDBIBRESOURCE = /\\addbibresource\{([^}]+)\}/;
 
 export const R_BIBLIOGRAPHY_STYLE = /\\bibliographystyle\{[^}]+\}/g;
 

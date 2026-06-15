@@ -61,6 +61,10 @@ export class LatexBlockSplitter {
             const [isBegin, beginName, isEnd, endName, isOpenBrace, isCloseBrace, isDoubleNewline, isMathSymbol] =
                   [match[1], match[2], match[3], match[4], match[5], match[6], match[7], match[8]];
 
+            // Strip optional args from environment names (e.g. frame[plain] → frame)
+            const cleanBeginName = beginName ? beginName.replace(/\[.*\]$/, '') : '';
+            const cleanEndName = endName ? endName.replace(/\[.*\]$/, '') : '';
+
             const currentBufferLineCount = (currentBuffer.match(/\n/g) || []).length;
 
             const hasTikzPictureInBuffer = /\\begin\{tikzpicture\}/.test(currentBuffer);
@@ -100,10 +104,10 @@ export class LatexBlockSplitter {
                 }
             }
             else if (isBegin && beginName) {
-                const isIgnoredEnv = ignoredEnvRegex.test(beginName);
+                const isIgnoredEnv = ignoredEnvRegex.test(cleanBeginName);
 
                 if (!isIgnoredEnv) {
-                    const isMajorEnv = majorEnvRegex.test(beginName);
+                    const isMajorEnv = majorEnvRegex.test(cleanBeginName);
 
                     if (isMajorEnv && (envStack.length === 0 && braceDepth === 0 || isTrapped)) {
                           if (currentBuffer.trim().length > 0) {
@@ -111,21 +115,21 @@ export class LatexBlockSplitter {
                             if (isTrapped) { envStack = []; braceDepth = 0; }
                         }
                     }
-                    envStack.push(beginName);
+                    envStack.push(cleanBeginName);
                 }
                 currentBuffer += fullMatch;
                 currentLine += matchLines;
             }
             else if (isEnd && endName) {
-                const isIgnoredEnv = ignoredEnvRegex.test(endName);
+                const isIgnoredEnv = ignoredEnvRegex.test(cleanEndName);
                 if (!isIgnoredEnv) {
-                    const idx = envStack.lastIndexOf(endName);
+                    const idx = envStack.lastIndexOf(cleanEndName);
                     if (idx !== -1) { envStack = envStack.slice(0, idx); }
                 }
                 currentBuffer += fullMatch;
                 currentLine += matchLines;
 
-                const isMathEnv = mathEnvRegex.test(endName);
+                const isMathEnv = mathEnvRegex.test(cleanEndName);
                 if (isMathEnv && isTrapped) {
                     if (currentBuffer.trim().length > 0) {
                         pushCurrentBlockAndStartAt(regex.lastIndex, currentLine, regex.lastIndex);

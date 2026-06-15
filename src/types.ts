@@ -15,9 +15,15 @@ export interface PreambleData {
     tikzMacroMap: Map<string, string>;
 
     title?: string;
+    subtitle?: string;
     author?: string;
+    institute?: string;
     date?: string;
     affiliation?: string;
+    shortTitle?: string;
+    shortAuthor?: string;
+    shortInstitute?: string;
+    shortDate?: string;
 }
 
 export interface MetadataResult {

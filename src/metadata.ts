@@ -199,6 +199,44 @@ function extractKatexMacro(header: MacroDefinitionHeader): { name: string; defin
  * The returned cleanedText preserves line structure for source mapping while
  * blanking definitions that should not render as document body content.
  */
+/**
+ * Extract a beamer/standard metadata command, capturing both optional [short] and required {long} args.
+ */
+function extractMetadataCommand(
+    text: string,
+    tagName: string,
+    maxOptionalArgs: number = 1
+): { short: string | undefined; long: string; start: number; end: number } | undefined {
+    // Use a more flexible regex for beamer commands that may have [short]{long}
+    const regex = new RegExp(
+        `\\\\(${tagName})(\\s*\\[[^\\]]*\\])?\\s*\\{`,
+        'g'
+    );
+    regex.lastIndex = 0;
+    const match = regex.exec(text);
+    if (!match) { return undefined; }
+    const start = match.index;
+    let idx = start + match[0].length;
+
+    let short: string | undefined;
+    // Parse optional args before the required arg
+    const optMatch = match[0].match(/\[([^\]]*)\]/);
+    if (optMatch) {
+        short = optMatch[1].trim();
+    }
+
+    // Read the required brace group
+    const required = readLatexGroup(text, idx - 1, { delimiter: 'brace' });
+    if (!required) { return undefined; }
+
+    return {
+        short: short || undefined,
+        long: required.content.trim(),
+        start,
+        end: required.end
+    };
+}
+
 export function extractMetadata(text: string): MetadataResult {
     let cleanedText = text.replace(/(?<!\\)%.*/gm, '%');
 
@@ -208,24 +246,40 @@ export function extractMetadata(text: string): MetadataResult {
     cleanedText = cleanedText.replace(/\\today\b/g, todayStr);
 
     let title: string | undefined;
+    let subtitle: string | undefined;
     let author: string | undefined;
+    let institute: string | undefined;
     let date: string | undefined;
     let affiliation: string | undefined;
+    let shortTitle: string | undefined;
+    let shortAuthor: string | undefined;
+    let shortInstitute: string | undefined;
+    let shortDate: string | undefined;
 
-    const titleRes = findCommand(cleanedText, 'title');
+    // Beamer-style \title[Short]{Long}. Keep the long form for display, short for footline.
+    const titleRes = extractMetadataCommand(cleanedText, 'title');
     if (titleRes) {
-        title = titleRes.content.replace(/\\\\/g, '<br/>');
+        title = titleRes.long.replace(/\\\\/g, '<br/>');
+        shortTitle = titleRes.short;
         cleanedText = cleanedText.substring(0, titleRes.start) + cleanedText.substring(titleRes.end);
     }
 
-    // REVTeX-style \author{...} can appear multiple times; collect into one block.
+    // Beamer-style \subtitle{...}
+    const subtitleRes = findCommand(cleanedText, 'subtitle');
+    if (subtitleRes) {
+        subtitle = subtitleRes.content.trim().replace(/\\\\/g, '<br/>');
+        cleanedText = cleanedText.substring(0, subtitleRes.start) + cleanedText.substring(subtitleRes.end);
+    }
+
+    // REVTeX/beamer-style \author[...]{...} can appear multiple times.
     // Each author may be followed by an \email{...} on the same line; fold into the author label.
     const authorParts: string[] = [];
     while (true) {
-        const next = findCommand(cleanedText, 'author');
+        const next = extractMetadataCommand(cleanedText, 'author');
         if (!next) { break; }
-        let entry = next.content.trim();
+        let entry = next.long.trim();
         let consumeEnd = next.end;
+        if (!shortAuthor && next.short) { shortAuthor = next.short; }
 
         const tail = cleanedText.substring(next.end);
         const emailMatch = tail.match(/^\s*\\email\s*\{([^}]*)\}/);
@@ -244,9 +298,19 @@ export function extractMetadata(text: string): MetadataResult {
         author = authorParts.join(', ');
     }
 
-    const dateRes = findCommand(cleanedText, 'date');
+    // Beamer-style \institute[...]{...}
+    const instituteRes = extractMetadataCommand(cleanedText, 'institute');
+    if (instituteRes) {
+        institute = instituteRes.long.replace(/\\\\/g, '<br/>').trim();
+        shortInstitute = instituteRes.short;
+        cleanedText = cleanedText.substring(0, instituteRes.start) + cleanedText.substring(instituteRes.end);
+    }
+
+    // Beamer-style \date[...]{...}
+    const dateRes = extractMetadataCommand(cleanedText, 'date');
     if (dateRes) {
-        date = dateRes.content;
+        date = dateRes.long.trim();
+        shortDate = dateRes.short;
         cleanedText = cleanedText.substring(0, dateRes.start) + cleanedText.substring(dateRes.end);
     }
 
@@ -262,6 +326,14 @@ export function extractMetadata(text: string): MetadataResult {
     if (affParts.length > 0) {
         affiliation = affParts.join('<br/>');
     }
+
+    // Strip beamer preamble configuration commands.
+    cleanedText = cleanedText.replace(
+        /\\(?:use(?:theme|colortheme|fonttheme|outertheme|innertheme)|setbeamertemplate|setbeamercolor|setbeamerfont|setbeamersize|usefonttheme|addtobeamertemplate|DeclareOptionBeamer|ExecuteOptionsBeamer|ProcessOptionsBeamer)(?:\*?)(?:\[[^\]]*\])?(?:\{[^}]*\})*/g,
+        ''
+    );
+    // Strip beamer mode declarations.
+    cleanedText = cleanedText.replace(/\\mode\s*<[^>]*>/g, '');
 
     const tikzGlobalParts: string[] = [];
     const tikzMacroMap = new Map<string, string>();
@@ -295,5 +367,5 @@ export function extractMetadata(text: string): MetadataResult {
 
     const tikzGlobal = tikzGlobalParts.join('\n');
     cleanedText = blankOutRanges(cleanedText, definitionRecords);
-    return { data: { macros, tikzGlobal, tikzMacroMap, title, author, date, affiliation }, cleanedText };
+    return { data: { macros, tikzGlobal, tikzMacroMap, title, subtitle, author, institute, date, affiliation, shortTitle, shortAuthor, shortInstitute, shortDate }, cleanedText };
 }

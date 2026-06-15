@@ -19,6 +19,7 @@ import {
     R_CREFRANGE,
     R_CITATION,
     R_BIBLIOGRAPHY,
+    R_ADDBIBRESOURCE,
     R_BIBLIOGRAPHY_STYLE,
     getTheoremDisplayName
 } from './patterns';
@@ -373,7 +374,12 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         priority: 71,
         apply: (text, renderer: RenderContext) => {
             text = text.replace(R_BIBLIOGRAPHY_STYLE, '');
-            return text.replace(new RegExp(R_BIBLIOGRAPHY, 'g'), () => {
+
+            // Strip \addbibresource (already processed in document loading)
+            text = text.replace(R_ADDBIBRESOURCE, '');
+
+            // Render bibliography function
+            const renderBibliography = () => {
                 if (renderer.citedKeys.length === 0) {
                     return renderer.protectHtml('bib', `<div class="latex-bibliography error">No citations found.</div>`);
                 }
@@ -397,7 +403,15 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 });
                 html += `</div>`;
                 return renderer.protectHtml('bib', html);
-            });
+            };
+
+            // Handle bibtex \bibliography{ref}
+            text = text.replace(new RegExp(R_BIBLIOGRAPHY, 'g'), renderBibliography);
+
+            // Handle biblatex \printbibliography
+            text = text.replace(/\\printbibliography\b/g, renderBibliography);
+
+            return text;
         }
     },
 
@@ -440,9 +454,145 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         apply: (text, renderer: RenderContext) => replaceLatexLinkCommands(text, renderer)
     },
 
+    {
+        name: 'minipage',
+        priority: 117,
+        apply: (text, renderer: RenderContext) => {
+            const minipageRegex = /\\begin\{minipage\}(?:\[([tcb])\])?(?:\[(\d+(?:\.\d+)?(?:pt|em|ex|cm|mm|in|px|%))?\])?\{((?:\d+(?:\.\d+)?)[^\}]*)\}([\s\S]*?)\\end\{minipage\}/g;
+            return text.replace(minipageRegex, (_match, pos, _height, width, content) => {
+                const vAlign = pos === 't' ? 'top' : pos === 'b' ? 'bottom' : 'middle';
+                const cssWidth = width.trim();
+                return `\n\n${renderer.protectHtml('minipage', `<div style="display:inline-block; vertical-align:${vAlign}; width:${cssWidth};" class="latex-minipage">${content.trim()}</div>`)}\n\n`;
+            });
+        }
+    },
+
     createFigureRule(),
     createAlgorithmRule(),
     createTableRule(),
+
+    {
+        name: 'center_environment',
+        priority: 118,
+        apply: (text) => {
+            // Strip \begin{center} and \end{center}, leaving content intact
+            // (bare_includegraphics at priority 121 will process any images inside)
+            text = text.replace(/\\begin\{center\}/g, '');
+            text = text.replace(/\\end\{center\}/g, '');
+            return text;
+        }
+    },
+
+    {
+        name: 'bare_includegraphics',
+        priority: 121,
+        apply: (text, renderer: RenderContext) => {
+            // Handle \includegraphics that appears outside figure/table/algorithm environments
+            // (common in beamer frames). The figure rule (priority 120) has already consumed
+            // \includegraphics inside figure environments, so this only processes bare ones.
+            return text.replace(/\\includegraphics(?:\[([^\]]*)\])?\s*\{([^}]+)\}/g, (_match, _options, imgPath) => {
+                const cleanPath = imgPath.trim();
+                const safePath = escapeHtmlAttribute(cleanPath);
+                const canvasId = `pdf-${Math.random().toString(36).substr(2, 9)}`;
+                if (cleanPath.toLowerCase().endsWith('.pdf')) {
+                    return `\n\n${renderer.protectHtml('img', `<canvas id="${canvasId}" data-req-path="${safePath}" style="width:100%; max-width:100%; height:auto; display:block; margin:0 auto;"></canvas>`)}\n\n`;
+                }
+                return `\n\n${renderer.protectHtml('img', `<img src="LOCAL_IMG:${safePath}" style="max-width:100%; display:block; margin:0 auto;">`)}\n\n`;
+            });
+        }
+    },
+
+    {
+        name: 'beamer_overlay_strip',
+        priority: 125,
+        apply: (text) => {
+            // Strip overlay specs attached to LaTeX commands: \item<1->, \item<+->
+            text = text.replace(/\\item\s*<[^>]*>/g, '\\item');
+            // Strip \only<...>{ — keep content (static preview)
+            text = text.replace(/\\only\s*<[^>]*>\{/g, '\\only{');
+            // Strip \onslide<...> — keep content
+            text = text.replace(/\\onslide\s*<[^>]*>/g, '');
+            // Strip \visible<...>{ — keep content
+            text = text.replace(/\\visible\s*<[^>]*>\{/g, '\\visible{');
+            // Strip \invisible<...>{ — keep content
+            text = text.replace(/\\invisible\s*<[^>]*>\{/g, '\\invisible{');
+            // Strip \uncover<...>{ — keep content
+            text = text.replace(/\\uncover\s*<[^>]*>\{/g, '\\uncover{');
+            // Strip \pause command
+            text = text.replace(/\\pause\b/g, '');
+            return text;
+        }
+    },
+
+    {
+        name: 'beamer_frame',
+        priority: 135,
+        apply: (text, renderer: RenderContext) => {
+            // Check if this block contains a frame
+            const hasFrame = /\\begin\{frame\}/.test(text) || /\\end\{frame\}/.test(text);
+            if (!hasFrame) {
+                // Still need to handle \makesectionpage/\thankspage/\tableofcontents which can appear outside frames
+                text = text.replace(/\\makesectionpage\b/g, () => {
+                    return renderer.protectHtml('secpage', '<div class="beamer-section-page"><div class="beamer-section-page-inner"></div></div>');
+                });
+                text = text.replace(/\\sectionpage\b/g, () => {
+                    return renderer.protectHtml('secpage', '<div class="beamer-section-page"><div class="beamer-section-page-inner"></div></div>');
+                });
+                text = text.replace(/\\thankspage\s*\{([^}]*)\}/g, (_match, thanksText) => {
+                    const safe = escapeHtml(thanksText.trim());
+                    return `\n\n${renderer.protectHtml('thanks', `<div class="beamer-frame beamer-thanks-page"><span>${safe}</span></div>`)}\n\n`;
+                });
+                return text;
+            }
+
+            let frameTitle = '';
+            // Extract \frametitle{...}
+            const ftMatch = text.match(/\\frametitle\s*\{((?:[^{}]|\{[^{}]*\})*)\}/);
+            if (ftMatch) {
+                const titleContent = renderer.renderInline(
+                    resolveLatexStyles(ftMatch[1], html => renderer.protectHtml('style', html))
+                );
+                frameTitle = `<div class="beamer-frame-title">${titleContent}</div>`;
+                text = text.replace(ftMatch[0], '');
+            }
+
+            // Strip \begin{frame}[...] / \end{frame}
+            text = text.replace(/\\begin\{frame\}(?:\[[^\]]*\])?/g, '');
+            text = text.replace(/\\end\{frame\}/g, '');
+
+            // Handle \tableofcontents — placeholder
+            text = text.replace(/\\tableofcontents\b/g, () => {
+                return renderer.protectHtml('toc', '<div class="beamer-toc-placeholder">Table of Contents</div>');
+            });
+
+            // Wrap entire frame content in a .beamer-frame container marker.
+            // The opening tag and closing tag must survive Markdown-it; protect them.
+            const openTag = renderer.protectHtml('frame-open', '<div class="beamer-frame">');
+            const closeTag = renderer.protectHtml('frame-close', '</div>');
+            const titlePart = frameTitle ? renderer.protectHtml('frametitle', frameTitle) : '';
+
+            return `\n\n${openTag}${titlePart}\n\n${text.trim()}\n\n${closeTag}\n\n`;
+        }
+    },
+
+    {
+        name: 'beamer_blocks',
+        priority: 145,
+        apply: (text, renderer: RenderContext) => {
+            const blockRegex = new RegExp(
+                `\\\\begin\\{(${REGEX_STR.BEAMER_BLOCK_ENVS})\\}\\s*\\{((?:[^{}]|\\{[^{}]*\\})*)\\}([\\s\\S]*?)\\\\end\\{\\1\\}`,
+                'gi'
+            );
+            return text.replace(blockRegex, (_match, envName, title, content) => {
+                const blockClass = envName === 'block' ? 'beamer-block' :
+                    envName === 'alertblock' ? 'beamer-alertblock' : 'beamer-exampleblock';
+                const safeTitle = renderer.renderInline(
+                    resolveLatexStyles(title.trim(), html => renderer.protectHtml('style', html))
+                );
+                return `\n\n${renderer.protectHtml(envName, `<div class="${blockClass}"><div class="beamer-block-title">${safeTitle}</div><div class="beamer-block-body">${content.trim()}</div></div>`)}\n\n`;
+            });
+        }
+    },
 
     {
         name: 'theorems_and_proofs',
@@ -494,12 +644,16 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 };
 
                 const safeTitle = processMeta(meta?.title);
+                const safeSubtitle = processMeta(meta?.subtitle);
                 const safeAuthor = processMeta(meta?.author);
+                const safeInstitute = processMeta(meta?.institute);
                 const safeAffiliation = processMeta(meta?.affiliation);
                 const safeDate = processMeta(meta?.date);
 
                 if (safeTitle) { titleBlock += `<h1 class="latex-title">${safeTitle}</h1>`; }
+                if (safeSubtitle) { titleBlock += `<div class="latex-subtitle">${safeSubtitle}</div>`; }
                 if (safeAuthor) { titleBlock += `<div class="latex-author">${safeAuthor}</div>`; }
+                if (safeInstitute) { titleBlock += `<div class="latex-institute">${safeInstitute}</div>`; }
                 if (safeAffiliation) { titleBlock += `<div class="latex-affiliation">${safeAffiliation}</div>`; }
                 if (safeDate) { titleBlock += `<div class="latex-date">${safeDate}</div>`; }
 
@@ -525,7 +679,8 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         name: 'sections',
         priority: 170,
         apply: (text, renderer: RenderContext) => {
-            const sectionRegex = new RegExp(`\\\\(${REGEX_STR.SECTION_LEVELS})(\\*?)\\{((?:[^{}]|{[^{}]*})*)\\}\\s*(\\\\label\\{[^}]+\\})?\\s*`, 'g');
+            // Supports both \section{Title} and \section[Short]{Long}
+            const sectionRegex = new RegExp(`\\\\(${REGEX_STR.SECTION_LEVELS})(\\*?)(?:\\[[^\\]]*\\])?\\{((?:[^{}]|{[^{}]*})*)\\}\\s*(\\\\label\\{[^}]+\\})?\\s*`, 'g');
 
             return text.replace(sectionRegex, (_match, level, star, content, label) => {
                 let prefix = '##';

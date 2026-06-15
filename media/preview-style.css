@@ -424,6 +424,114 @@ body.vscode-dark .tikz-container svg [fill="rgb(0, 0, 0)"] {
 }
 
 
+/* --- Beamer Presentation --- */
+.beamer-frame {
+    /* Each frame is rendered as its own slide-like card */
+    margin: 1em 0 2em 0;
+    padding: 1.2em 1.5em 2em 1.5em;
+    border: 1px solid var(--snaptex-widget-border, var(--vscode-editorWidget-border, #ccc));
+    border-radius: 8px;
+    background-color: var(--snaptex-bg, var(--vscode-editor-background));
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    position: relative;
+    page-break-after: always;
+    break-after: page;
+}
+
+.beamer-frame::before {
+    content: "Slide";
+    position: absolute;
+    top: 0.5em;
+    right: 1em;
+    font-size: 0.75em;
+    color: var(--snaptex-muted, var(--vscode-descriptionForeground));
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+}
+
+.beamer-frame-title {
+    font-size: 1.5em;
+    font-weight: bold;
+    margin-bottom: 0.8em;
+    padding-bottom: 0.3em;
+    border-bottom: 2px solid;
+    border-color: var(--vscode-textLink-foreground, #0066cc);
+    color: var(--vscode-textLink-foreground, #0066cc);
+}
+.beamer-block {
+    margin: 0.8em 0;
+    border-radius: 6px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+    overflow: hidden;
+}
+.beamer-block-title {
+    padding: 0.4em 0.8em;
+    font-weight: bold;
+    color: #ffffff;
+    background-color: var(--vscode-textLink-foreground, #0066cc);
+}
+.beamer-block-body {
+    padding: 0.6em 0.8em;
+    background-color: color-mix(in srgb, var(--vscode-textLink-foreground, #0066cc) 10%, transparent);
+}
+.beamer-alertblock .beamer-block-title {
+    background-color: #d9534f;
+}
+.beamer-alertblock .beamer-block-body {
+    background-color: rgba(217, 83, 79, 0.1);
+}
+.beamer-exampleblock .beamer-block-title {
+    background-color: #5cb85c;
+}
+.beamer-exampleblock .beamer-block-body {
+    background-color: rgba(92, 184, 92, 0.1);
+}
+
+/* Beamer section page */
+.beamer-section-page {
+    text-align: center;
+    margin: 2em 0;
+    padding: 2em 0;
+    border: 1px solid var(--snaptex-widget-border, var(--vscode-editorWidget-border, #ccc));
+    border-radius: 8px;
+    background-color: var(--snaptex-bg, var(--vscode-editor-background));
+}
+.beamer-section-page-inner {
+    padding: 1.5em 0;
+    border-top: 2px solid;
+    border-bottom: 2px solid;
+    border-color: var(--vscode-textLink-foreground, #0066cc);
+}
+
+/* Beamer thanks page */
+.beamer-thanks-page {
+    text-align: center;
+    padding: 4em 0;
+    font-size: 2em;
+    font-weight: bold;
+}
+
+/* Beamer TOC placeholder */
+.beamer-toc-placeholder {
+    padding: 1em;
+    font-style: italic;
+    color: var(--snaptex-muted, var(--vscode-descriptionForeground));
+}
+
+/* Minipage (side-by-side columns) */
+.latex-minipage {
+    box-sizing: border-box;
+    padding: 0 0.5em;
+}
+.latex-minipage:first-child {
+    padding-left: 0;
+}
+.latex-minipage:last-child {
+    padding-right: 0;
+}
+
+
 /* --- Float Placeholders (Figure/Table) --- */
 .latex-float-placeholder {
     display: block;
