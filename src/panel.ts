@@ -352,12 +352,14 @@ export class TexPreviewPanel {
 
     private postWebviewConfig() {
         const config = vscode.workspace.getConfiguration('snaptex');
+        const mathRenderer = config.get<string>('mathRenderer', 'katex') === 'mathjax' ? 'mathjax' : 'katex';
         this.postMessage({
             command: ExtensionToWebviewCommand.Config,
             config: {
                 autoScrollDelay: Math.max(0, config.get<number>('autoScrollDelay', 100)),
                 debugMemory: config.get<boolean>('debugMemory', false),
-                virtualMode: getVirtualMode(config)
+                virtualMode: getVirtualMode(config),
+                mathRenderer
             }
         });
     }
@@ -419,6 +421,10 @@ export class TexPreviewPanel {
         const sourceChanged = previousSourceUri !== undefined && normalizeUri(previousSourceUri) !== normalizeUri(docUri);
 
         this._sourceUri = docUri;
+
+        const mathRenderer = vscode.workspace.getConfiguration('snaptex').get<string>('mathRenderer', 'katex') as 'katex' | 'mathjax';
+        this._renderer.setMathRenderer(mathRenderer);
+
         if (sourceChanged) {
             this._renderer.resetState();
         }
@@ -454,6 +460,11 @@ export class TexPreviewPanel {
 
         const katexCssUri = toUri('media/vendor/katex/katex.min.css');
         const styleUri = toUri('media/preview-style.css');
+
+        const mathRenderer = vscode.workspace.getConfiguration('snaptex').get<string>('mathRenderer', 'katex');
+        const mathjaxCssBlock = mathRenderer === 'mathjax'
+            ? `<style id="mathjax-styles">${this._renderer.getMathJaxCSS()}</style>`
+            : '';
         const webviewMainUri = toUri('media/webview-main.js');
         const webviewPdfUri = toUri('media/webview-pdf.js');
         const pdfJsUri = toUri('media/vendor/pdfjs/pdf.mjs');
@@ -473,7 +484,9 @@ export class TexPreviewPanel {
 
         return htmlContent
             .replace(/{{cspSource}}/g, this._panel.webview.cspSource)
+            .replace(/{{cspSource}}/g, this._panel.webview.cspSource)
             .replace(/{{katexCssUri}}/g, katexCssUri.toString())
+            .replace(/{{mathjaxCssBlock}}/g, mathjaxCssBlock)
             .replace(/{{styleUri}}/g, styleUri.toString())
             .replace(/{{webviewMainUri}}/g, webviewMainUri.toString())
             .replace(/{{webviewPdfUri}}/g, webviewPdfUri.toString())

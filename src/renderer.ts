@@ -1,7 +1,8 @@
 import MarkdownIt from 'markdown-it';
 
 import { DiffEngine, DiffResult } from './diff';
-import { BlockNumberingCounts, BlockTextSnapshot, NumberingPayload, PatchPayload, RenderContext, RenderedBlockMeta, RenderDocumentView, RenderOptions, SourceLocation } from './types';
+import { BlockNumberingCounts, BlockTextSnapshot, MathRendererType, NumberingPayload, PatchPayload, RenderContext, RenderedBlockMeta, RenderDocumentView, RenderOptions, SourceLocation } from './types';
+import { resetMathJax, getMathJaxCSS as getMathJaxCSSFromRenderer } from './mathjax-renderer';
 import { DEFAULT_PREPROCESS_RULES, postProcessHtml } from './rules';
 import { LatexCounterScanner } from './scanner';
 import { R_BIBLIOGRAPHY } from './patterns';
@@ -34,6 +35,8 @@ export class SmartRenderer {
     private md: MarkdownIt | null = null;
     private protector = new ProtectionManager();
     private currentMacros: Record<string, string> = {};
+    private mathRenderer: MathRendererType = 'katex';
+    private currentLabelMap: Record<string, string> = {};
 
     private blockMap: { start: number; count: number }[] = [];
     private scanner = new LatexCounterScanner();
@@ -48,6 +51,8 @@ export class SmartRenderer {
             get document() { return renderer.documentView; },
             get citedKeys() { return renderer._citedKeys; },
             get bibEntries() { return renderer.documentView ? renderer.documentView.bibEntries : new Map(); },
+            get mathRenderer() { return renderer.mathRenderer; },
+            get labelMap() { return renderer.currentLabelMap; },
             protectHtml: (namespace, html) => this.protector.protect(namespace, html),
             renderInline: text => this.renderInline(text),
             resolveCitation: key => this.resolveCitation(key)
@@ -287,6 +292,7 @@ export class SmartRenderer {
         const scanResult = this.scanner.scan(blockAccess.provider);
 
         const numberingData = this.buildNumberingPayload(scanResult);
+        this.currentLabelMap = scanResult.labelMap;
 
         const diff = DiffEngine.compute(this.lastBlocks, blockAccess.hashBlocks);
 
@@ -394,5 +400,21 @@ export class SmartRenderer {
             return b.start + Math.floor(b.count * ratio);
         }
         return 0;
+    }
+
+    public setMathRenderer(type: MathRendererType) {
+        if (type !== this.mathRenderer) {
+            this.mathRenderer = type;
+            this.lastBlocks = [];
+            this.lastTextSnapshot = EMPTY_TEXT_SNAPSHOT;
+            this.lastMetaFingerprint = "";
+            if (type === 'mathjax') {
+                resetMathJax();
+            }
+        }
+    }
+
+    public getMathJaxCSS(): string {
+        return this.mathRenderer === 'mathjax' ? getMathJaxCSSFromRenderer() : '';
     }
 }

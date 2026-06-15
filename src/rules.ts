@@ -158,7 +158,7 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
 
                 finalMath = replaceMathRefs(finalMath, renderer);
 
-                if (envName) {
+                if (envName && renderer.mathRenderer !== 'mathjax') {
                     const name = envName.toLowerCase();
                     if (['align', 'flalign', 'alignat', 'multline'].includes(name)) {
                         finalMath = `\\begin{aligned}\n${finalMath}\n\\end{aligned}`;

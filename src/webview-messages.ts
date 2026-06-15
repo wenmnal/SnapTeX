@@ -97,6 +97,7 @@ interface ConfigMessage {
         autoScrollDelay: number;
         debugMemory: boolean;
         virtualMode: boolean;
+        mathRenderer: 'katex' | 'mathjax';
     };
 }
 

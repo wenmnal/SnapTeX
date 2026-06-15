@@ -1320,7 +1320,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             if (!text || text.length < 3) return null;
             const walker = document.createTreeWalker(rootElement, NodeFilter.SHOW_TEXT, {
                 acceptNode: (node) => {
-                    if (node.parentElement && node.parentElement.closest('.katex')) return NodeFilter.FILTER_REJECT;
+                    if (node.parentElement && (node.parentElement.closest('.katex') || node.parentElement.closest('mjx-container'))) return NodeFilter.FILTER_REJECT;
                     return NodeFilter.FILTER_ACCEPT;
                 }
             });

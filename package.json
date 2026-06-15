@@ -133,6 +133,19 @@
           "type": "boolean",
           "default": true,
           "description": "Enable block shell virtualization for lower memory usage on long previews. Reload or reopen the SnapTeX preview after changing this setting."
+        },
+        "snaptex.mathRenderer": {
+          "type": "string",
+          "enum": [
+            "katex",
+            "mathjax"
+          ],
+          "default": "katex",
+          "markdownDescription": "Math rendering engine. `katex` is fast and lightweight; `mathjax` supports more LaTeX packages (e.g. `physics`, `mathtools`, `braket`, `cancel`).",
+          "enumDescriptions": [
+            "KaTeX — fast, lightweight math renderer (default)",
+            "MathJax — broader LaTeX compatibility, supports physics and more packages"
+          ]
         }
       }
     }
@@ -169,6 +182,8 @@
     "@planktimerr/tikzjax": "^1.0.0",
     "katex": "^0.16.27",
     "markdown-it": "^14.1.0",
+    "mathjax": "^3.2.2",
+    "mathjax-full": "^3.2.2",
     "pdfjs-dist": "^5.4.449"
   }
 }

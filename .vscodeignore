@@ -14,4 +14,9 @@ media/demo/*.gif
 **/*.ts
 **/.vscode-test.*
 .conda
+tex/**
+demo/**
+plan.md
+CLAUDE.md
+*.vsix
 !node_modules\@iktakahiro\markdown-it-katex\node_modules\katex\dist

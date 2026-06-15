@@ -5,3 +5,4 @@ media/vendor/
 media/webview-*.js.map
 .vscode-test/
 *.vsix
+tex

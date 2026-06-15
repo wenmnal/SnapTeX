@@ -74,6 +74,7 @@ export interface RenderDocumentView {
 
 export interface RenderOptions {
     deferFullHtml?: boolean;
+    mathRenderer?: MathRendererType;
 }
 
 export interface RenderedBlockMeta {
@@ -115,11 +116,15 @@ export interface PatchPayload {
     dirtyBlocks?: { [index: number]: string };
 }
 
+export type MathRendererType = 'katex' | 'mathjax';
+
 export interface RenderContext {
     currentMacros: Record<string, string>;
     document?: RenderDocumentView;
     citedKeys: string[];
     bibEntries: Map<string, BibEntry>;
+    mathRenderer: MathRendererType;
+    labelMap: Record<string, string>;
     protectHtml(namespace: string, html: string): string;
     renderInline(text: string): string;
     resolveCitation(key: string): number;

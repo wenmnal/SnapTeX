@@ -144,6 +144,28 @@ p:has(.no-indent-marker) {
     contain: layout;
 }
 
+/* --- Math Formula MathJax SVG Adaptation --- */
+mjx-container {
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+mjx-container[jax="SVG"] {
+    direction: ltr;
+}
+
+mjx-container[jax="SVG"][display="true"] {
+    display: block;
+    text-align: center;
+    margin: 1em 0;
+}
+
+mjx-container[jax="SVG"] > svg {
+    overflow: visible;
+    min-height: 1px;
+    min-width: 1px;
+}
+
 /* TikZ Container */
 .tikz-container {
     /* [CHANGED] Switch to block layout. Flexbox sometimes respects SVG intrinsic 'pt' width too stubbornly. */
