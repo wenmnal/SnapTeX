@@ -69,6 +69,8 @@ export const REGEX_STR = {
 export const R_LABEL = /\\label\s*\{([^}]+)\}/;
 
 export const R_REF = /\\(ref|eqref)\*?\{([^}]+)\}/g;
+export const R_CREF = /\\(cref|Cref)\*?\{([^}]+)\}/g;
+export const R_CREFRANGE = /\\(crefrange|Crefrange)\*?\{([^}]+)\}\{([^}]+)\}/g;
 
 export const R_BIBLIOGRAPHY = /\\bibliography\{([^}]+)\}/;
 

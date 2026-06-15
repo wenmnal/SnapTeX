@@ -14,6 +14,57 @@ function replaceFloatEnvironment(text: string, envName: 'figure' | 'algorithm' |
     return text.replace(pattern, (_match, _star, content) => render(content));
 }
 
+/**
+ * Walks `text` looking for `\subfigure` / `\subfloat` calls and replaces each
+ * with the result of `render(captionArg, body)`. Both the optional `[caption]`
+ * and the mandatory `{body}` are matched with brace balancing so nested
+ * braces (e.g. `\includegraphics[width=0.45\linewidth]{a.pdf}`) survive.
+ * Returns the rewritten string.
+ */
+function extractSubfigureCalls(
+    text: string,
+    render: (captionArg: string | undefined, body: string) => string
+): string {
+    const re = /\\(?:subfigure|subfloat)\b/g;
+    let out = '';
+    let cursor = 0;
+    let m: RegExpExecArray | null;
+
+    const readBalanced = (open: string, close: string, from: number): { content: string; end: number } | null => {
+        if (text[from] !== open) { return null; }
+        let depth = 0;
+        for (let i = from; i < text.length; i++) {
+            const ch = text[i];
+            if (ch === '\\') { i++; continue; }
+            if (ch === open) { depth++; continue; }
+            if (ch === close) {
+                depth--;
+                if (depth === 0) {
+                    return { content: text.substring(from + 1, i), end: i + 1 };
+                }
+            }
+        }
+        return null;
+    };
+
+    while ((m = re.exec(text)) !== null) {
+        let p = m.index + m[0].length;
+        // optional [caption]
+        let captionArg: string | undefined;
+        // optional [width] preceding the caption is uncommon; subfigure spec is `\subfigure[caption]{body}`.
+        const optMatch = readBalanced('[', ']', p);
+        if (optMatch) { captionArg = optMatch.content; p = optMatch.end; }
+        // mandatory {body}
+        const bodyMatch = readBalanced('{', '}', p);
+        if (!bodyMatch) { continue; }
+        out += text.substring(cursor, m.index) + render(captionArg, bodyMatch.content);
+        cursor = bodyMatch.end;
+        re.lastIndex = bodyMatch.end;
+    }
+    out += text.substring(cursor);
+    return out;
+}
+
 function extractRenderedCaption(content: string, renderer: RenderContext, config: FloatCaptionConfig): { content: string; captionHtml: string } {
     const captionRes = findCommand(content, 'caption');
     if (!captionRes) {
@@ -47,13 +98,29 @@ export function createFigureRule(): PreprocessRule {
                 body = body.trim().replace(/\\centering/g, '');
                 body = unwrapResizeboxAroundProtectedContent(body);
 
+                // Old-style \subfigure[caption]{body} from the `subfigure`
+                // package. Each occurrence becomes a flex item; siblings end
+                // up side-by-side under the parent figure. Counter labels
+                // (a)/(b)/... are handed out in document order.
+                let subIndex = 0;
+                body = extractSubfigureCalls(body, (capArg, innerBody) => {
+                    const letter = String.fromCharCode(97 + (subIndex++ % 26));
+                    const captionInner = capArg !== undefined
+                        ? renderCaptionContent(capArg, renderer)
+                        : '';
+                    const subCaptionHtml = captionInner
+                        ? `<div class="latex-subfigure-caption">(${letter}) ${captionInner}</div>`
+                        : '';
+                    return `<div class="latex-subfigure">${innerBody}${subCaptionHtml}</div>`;
+                });
+
                 body = body.replace(/\\includegraphics(?:\[.*?\])?\s*\{([^}]+)\}/g, (_imgMatch: string, imgPath: string) => {
                     const cleanPath = imgPath.trim();
                     const safePath = escapeHtmlAttribute(cleanPath);
                     const canvasId = `pdf-${Math.random().toString(36).substr(2, 9)}`;
 
                     if (cleanPath.toLowerCase().endsWith('.pdf')) {
-                        return `<canvas id="${canvasId}" data-req-path="${safePath}" style="width:100%; max-width:100%; display:block; margin:0 auto;"></canvas>`;
+                        return `<canvas id="${canvasId}" data-req-path="${safePath}" style="width:100%; max-width:100%; height:auto; display:block; margin:0 auto;"></canvas>`;
                     }
                     return `<img src="LOCAL_IMG:${safePath}" style="max-width:100%; display:block; margin:0 auto;">`;
                 });

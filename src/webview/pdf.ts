@@ -87,12 +87,27 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             pdfDocument = await loadingTask.promise;
 
             const page = await pdfDocument.getPage(1);
-            const scale = 2;
-            const viewport = page.getViewport({ scale: scale });
+
+            // Pick a render scale so the rendered bitmap matches the canvas's
+            // CSS display size at the device's pixel density (× a sharpening
+            // factor). PDFs that were rasterised at scale=2 looked blurry on
+            // HiDPI screens once CSS stretched them to fill the figure column;
+            // this binds resolution to displayed width instead.
+            const baseViewport = page.getViewport({ scale: 1 });
+            const cssWidth = canvas.clientWidth || baseViewport.width;
+            const dpr = window.devicePixelRatio || 1;
+            // Hard-cap the upper end so very wide previews on Retina don't
+            // allocate gigantic canvases.
+            const scale = Math.min(8, Math.max(2, (cssWidth * dpr * 1.5) / baseViewport.width));
+            const viewport = page.getViewport({ scale });
+
             if (canvas.width !== viewport.width || canvas.height !== viewport.height) {
                 canvas.height = viewport.height;
                 canvas.width = viewport.width;
             }
+            // Make CSS keep the natural aspect ratio at the displayed width.
+            canvas.style.height = 'auto';
+
             const context = canvas.getContext('2d');
             if (!context) return;
             await page.render({ canvasContext: context, viewport: viewport }).promise;

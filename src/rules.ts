@@ -15,6 +15,8 @@ import {
     REGEX_STR,
     R_LABEL,
     R_REF,
+    R_CREF,
+    R_CREFRANGE,
     R_CITATION,
     R_BIBLIOGRAPHY,
     R_BIBLIOGRAPHY_STYLE,
@@ -247,6 +249,59 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 const result = (type === 'eqref') ? `(${joinedLinks})` : joinedLinks;
                 return renderer.protectHtml('ref', result);
             });
+
+            // \cref / \Cref (cleveref). Prefix is inferred from the label key
+            // ("eq:"/"fig:"/"tbl:"/"sec:"/"alg:"/"thm:"). \Cref capitalises.
+            const crefPrefix = (key: string, capitalised: boolean): string => {
+                const head = key.split(':', 1)[0].toLowerCase();
+                const map: Record<string, [string, string]> = {
+                    eq: ['eq.', 'Eq.'],
+                    equation: ['eq.', 'Eq.'],
+                    fig: ['fig.', 'Fig.'],
+                    figure: ['fig.', 'Fig.'],
+                    tbl: ['table', 'Table'],
+                    tab: ['table', 'Table'],
+                    table: ['table', 'Table'],
+                    sec: ['sec.', 'Sec.'],
+                    section: ['sec.', 'Sec.'],
+                    chap: ['chap.', 'Chap.'],
+                    chapter: ['chap.', 'Chap.'],
+                    alg: ['alg.', 'Alg.'],
+                    algorithm: ['alg.', 'Alg.'],
+                    thm: ['thm.', 'Thm.'],
+                    theorem: ['thm.', 'Thm.'],
+                    lem: ['lemma', 'Lemma'],
+                    lemma: ['lemma', 'Lemma'],
+                    cor: ['cor.', 'Cor.'],
+                    prop: ['prop.', 'Prop.']
+                };
+                const entry = map[head];
+                if (!entry) { return ''; }
+                return (capitalised ? entry[1] : entry[0]) + ' ';
+            };
+
+            const renderCrefLink = (label: string): string => {
+                const safe = escapeHtmlAttribute(label);
+                return `<a href="#${safe}" class="latex-link latex-ref sn-ref" data-key="${safe}">?</a>`;
+            };
+
+            text = text.replace(R_CREF, (_match, cmd, labels) => {
+                const capital = cmd === 'Cref';
+                const labelArray = labels.split(',').map((l: string) => l.trim()).filter(Boolean);
+                if (labelArray.length === 0) { return ''; }
+                const prefix = crefPrefix(labelArray[0], capital);
+                const linked = labelArray.map(renderCrefLink).join(', ');
+                return renderer.protectHtml('cref', prefix + linked);
+            });
+
+            text = text.replace(R_CREFRANGE, (_match, cmd, a, b) => {
+                const capital = cmd === 'Crefrange';
+                const labelA = a.trim(), labelB = b.trim();
+                const prefix = crefPrefix(labelA, capital);
+                const dash = '–';
+                return renderer.protectHtml('cref', prefix + renderCrefLink(labelA) + dash + renderCrefLink(labelB));
+            });
+
             return text;
         }
     },

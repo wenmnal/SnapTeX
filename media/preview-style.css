@@ -8,33 +8,122 @@
 }
 
 /*
- * Preview theme override. When `data-snaptex-theme` is "light" or "dark",
- * we redefine the same `--vscode-...` variables the rest of the stylesheet
- * already reads from, so every existing rule picks up the new palette
- * without per-rule changes. "auto" leaves VS Code's own variables alone.
+ * Preview theme override. VS Code injects --vscode-* variables as INLINE
+ * styles on <html>, which beat any external selector via specificity. So
+ * instead of redefining those variables, we redirect them through
+ * SnapTeX-owned variables under [data-snaptex-theme="light|dark"]. Body
+ * and other rules below read these snaptex-* fallbacks; under "auto" they
+ * fall back to the VS Code variables exactly as before.
  */
 html[data-snaptex-theme="light"] {
-    --vscode-editor-foreground: #1f1f1f;
-    --vscode-editor-background: #ffffff;
-    --vscode-editorWidget-background: #f3f3f3;
-    --vscode-editorWidget-border: #d4d4d4;
-    --vscode-textLink-foreground: #0066cc;
-    --vscode-textLink-activeForeground: #004c99;
-    --vscode-editor-wordHighlightBackground: rgba(255, 220, 90, 0.55);
-    --vscode-descriptionForeground: #4a4a4a;
+    --snaptex-fg: #1f1f1f;
+    --snaptex-bg: #ffffff;
+    --snaptex-widget-bg: #f3f3f3;
+    --snaptex-widget-border: #d4d4d4;
+    --snaptex-link: #0066cc;
+    --snaptex-link-active: #004c99;
+    --snaptex-highlight: rgba(255, 220, 90, 0.55);
+    --snaptex-muted: #4a4a4a;
     color-scheme: light;
 }
 
 html[data-snaptex-theme="dark"] {
-    --vscode-editor-foreground: #e4e4e4;
-    --vscode-editor-background: #1e1e1e;
-    --vscode-editorWidget-background: #252526;
-    --vscode-editorWidget-border: #3c3c3c;
-    --vscode-textLink-foreground: #4ea1ff;
-    --vscode-textLink-activeForeground: #82bbff;
-    --vscode-editor-wordHighlightBackground: rgba(255, 213, 75, 0.30);
-    --vscode-descriptionForeground: #a0a0a0;
+    --snaptex-fg: #e4e4e4;
+    --snaptex-bg: #1e1e1e;
+    --snaptex-widget-bg: #252526;
+    --snaptex-widget-border: #3c3c3c;
+    --snaptex-link: #4ea1ff;
+    --snaptex-link-active: #82bbff;
+    --snaptex-highlight: rgba(255, 213, 75, 0.30);
+    --snaptex-muted: #a0a0a0;
     color-scheme: dark;
+}
+
+/*
+ * When a theme is explicitly set, force-override every element that read
+ * --vscode-editor-foreground / --vscode-editor-background / link colours.
+ * These rules use !important so they beat the per-element rules further
+ * down in this file (which were authored before the theme override
+ * existed). Under "auto" they don't match.
+ */
+html[data-snaptex-theme="light"] body,
+html[data-snaptex-theme="dark"] body {
+    color: var(--snaptex-fg) !important;
+    background-color: var(--snaptex-bg) !important;
+}
+html[data-snaptex-theme="light"] a,
+html[data-snaptex-theme="dark"] a,
+html[data-snaptex-theme="light"] .latex-link,
+html[data-snaptex-theme="dark"] .latex-link {
+    color: var(--snaptex-link) !important;
+}
+html[data-snaptex-theme="light"] a:hover,
+html[data-snaptex-theme="dark"] a:hover {
+    color: var(--snaptex-link-active) !important;
+}
+html[data-snaptex-theme="light"] svg [stroke="currentColor"],
+html[data-snaptex-theme="dark"] svg [stroke="currentColor"] {
+    stroke: var(--snaptex-fg) !important;
+}
+html[data-snaptex-theme="light"] svg [fill="currentColor"],
+html[data-snaptex-theme="dark"] svg [fill="currentColor"] {
+    fill: var(--snaptex-fg) !important;
+}
+
+/*
+ * Catch-all override: any element whose color/background/border was wired
+ * to a --vscode-* variable now resolves to the SnapTeX palette. We can't
+ * scope this with attribute selectors per element, so we duplicate by
+ * targeting the elements we know exist (tables, blockquotes, code, error
+ * boxes, scrollbars). Add new selectors here when you find one that's
+ * still leaking the editor palette.
+ */
+html[data-snaptex-theme="light"] .latex-table table,
+html[data-snaptex-theme="dark"] .latex-table table,
+html[data-snaptex-theme="light"] .latex-table .latex-tabular-preview,
+html[data-snaptex-theme="dark"] .latex-table .latex-tabular-preview,
+html[data-snaptex-theme="light"] .latex-table thead tr:last-child th,
+html[data-snaptex-theme="dark"] .latex-table thead tr:last-child th,
+html[data-snaptex-theme="light"] .latex-table tr.table-row-rule-above td,
+html[data-snaptex-theme="dark"] .latex-table tr.table-row-rule-above td,
+html[data-snaptex-theme="light"] .latex-table tr.table-row-rule-above th,
+html[data-snaptex-theme="dark"] .latex-table tr.table-row-rule-above th {
+    color: var(--snaptex-fg) !important;
+}
+html[data-snaptex-theme="light"] .latex-table .latex-tabular-preview,
+html[data-snaptex-theme="dark"] .latex-table .latex-tabular-preview {
+    border-top-color: var(--snaptex-fg) !important;
+    border-bottom-color: var(--snaptex-fg) !important;
+}
+html[data-snaptex-theme="light"] .latex-table thead tr:last-child th,
+html[data-snaptex-theme="dark"] .latex-table thead tr:last-child th,
+html[data-snaptex-theme="light"] .latex-table tr.table-row-rule-above td,
+html[data-snaptex-theme="dark"] .latex-table tr.table-row-rule-above td,
+html[data-snaptex-theme="light"] .latex-table tr.table-row-rule-above th,
+html[data-snaptex-theme="dark"] .latex-table tr.table-row-rule-above th {
+    border-color: var(--snaptex-fg) !important;
+}
+html[data-snaptex-theme="light"] .latex-table .table-body::-webkit-scrollbar-track,
+html[data-snaptex-theme="dark"] .latex-table .table-body::-webkit-scrollbar-track {
+    background-color: var(--snaptex-bg) !important;
+}
+
+html[data-snaptex-theme="light"] .hover-tooltip,
+html[data-snaptex-theme="dark"] .hover-tooltip {
+    background: var(--snaptex-bg) !important;
+    color: var(--snaptex-fg) !important;
+    border-color: var(--snaptex-widget-border) !important;
+}
+html[data-snaptex-theme="light"] .tooltip-header,
+html[data-snaptex-theme="dark"] .tooltip-header {
+    background-color: var(--snaptex-widget-bg) !important;
+    border-bottom-color: var(--snaptex-widget-border) !important;
+    color: var(--snaptex-fg) !important;
+}
+html[data-snaptex-theme="light"] .hover-tooltip .target-block,
+html[data-snaptex-theme="dark"] .hover-tooltip .target-block {
+    background-color: var(--snaptex-highlight) !important;
+    border-left-color: var(--snaptex-link-active) !important;
 }
 
 .snaptex-theme-toggle {
@@ -397,6 +486,41 @@ body.vscode-dark .tikz-container svg [fill="rgb(0, 0, 0)"] {
 
 .latex-figure { text-align: center; margin: 20px 0; }
 .latex-figure img { max-width: 100%; height: auto; }
+
+/*
+ * Old-style \subfigure[cap]{body}: a flex row of side-by-side panels under
+ * the parent figure. Each \subfigure becomes a `.latex-subfigure` flex item.
+ * Wrap to a new row when there isn't enough horizontal space.
+ */
+.latex-figure {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 0.6em 0.4em;
+}
+.latex-figure > .figure-caption,
+.latex-figure > .latex-hidden-label {
+    flex: 1 0 100%;
+}
+.latex-subfigure {
+    flex: 0 1 auto;
+    max-width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+.latex-subfigure img,
+.latex-subfigure canvas {
+    max-width: 100%;
+    height: auto;
+    display: block;
+}
+.latex-subfigure-caption {
+    margin-top: 0.25em;
+    font-size: 0.92em;
+    text-align: center;
+}
 
 /* Table preview */
 .latex-table {
