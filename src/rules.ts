@@ -205,6 +205,31 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
     },
 
     {
+        name: 'expand_text_macros',
+        priority: 55,
+        apply: (text, renderer: RenderContext) => {
+            const macros = renderer.currentMacros;
+            const names: string[] = [];
+            for (const [name, body] of Object.entries(macros)) {
+                if (!name.startsWith('\\')) { continue; }
+                if (/#\d/.test(body)) { continue; }
+                if (!/^\\[a-zA-Z@]+$/.test(name)) { continue; }
+                names.push(name);
+            }
+            if (names.length === 0) { return text; }
+
+            names.sort((a, b) => b.length - a.length);
+            const namePattern = names.map(n => n.slice(1)).join('|');
+            const re = new RegExp(`\\\\(${namePattern})(?![a-zA-Z@])`, 'g');
+
+            return text.replace(re, (match, name) => {
+                const expansion = macros['\\' + name];
+                return expansion !== undefined ? expansion : match;
+            });
+        }
+    },
+
+    {
         name: 'refs_and_labels',
         priority: 60,
         apply: (text, renderer: RenderContext) => {
@@ -415,10 +440,12 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
 
                 const safeTitle = processMeta(meta?.title);
                 const safeAuthor = processMeta(meta?.author);
+                const safeAffiliation = processMeta(meta?.affiliation);
                 const safeDate = processMeta(meta?.date);
 
                 if (safeTitle) { titleBlock += `<h1 class="latex-title">${safeTitle}</h1>`; }
                 if (safeAuthor) { titleBlock += `<div class="latex-author">${safeAuthor}</div>`; }
+                if (safeAffiliation) { titleBlock += `<div class="latex-affiliation">${safeAffiliation}</div>`; }
                 if (safeDate) { titleBlock += `<div class="latex-date">${safeDate}</div>`; }
 
                 text = text.replace(/\\maketitle.*/g, `\n\n` + renderer.protectHtml('meta', titleBlock) + `\n\n`);

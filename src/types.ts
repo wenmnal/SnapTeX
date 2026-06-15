@@ -17,6 +17,7 @@ export interface PreambleData {
     title?: string;
     author?: string;
     date?: string;
+    affiliation?: string;
 }
 
 export interface MetadataResult {

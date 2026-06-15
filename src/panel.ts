@@ -217,6 +217,9 @@ export class TexPreviewPanel {
                     case WebviewToExtensionCommand.RequestBlockHtml:
                         this.handleBlockHtmlRequest(message);
                         break;
+                    case WebviewToExtensionCommand.ToggleTheme:
+                        vscode.commands.executeCommand('snaptex.toggleTheme');
+                        break;
                     default:
                         assertNever(message);
                 }
@@ -350,16 +353,24 @@ export class TexPreviewPanel {
         this._panel.webview.postMessage(message);
     }
 
+    public refreshConfig() {
+        this.postWebviewConfig();
+    }
+
     private postWebviewConfig() {
         const config = vscode.workspace.getConfiguration('snaptex');
         const mathRenderer = config.get<string>('mathRenderer', 'katex') === 'mathjax' ? 'mathjax' : 'katex';
+        const themeRaw = config.get<string>('previewTheme', 'auto');
+        const previewTheme: 'auto' | 'light' | 'dark' =
+            themeRaw === 'light' ? 'light' : themeRaw === 'dark' ? 'dark' : 'auto';
         this.postMessage({
             command: ExtensionToWebviewCommand.Config,
             config: {
                 autoScrollDelay: Math.max(0, config.get<number>('autoScrollDelay', 100)),
                 debugMemory: config.get<boolean>('debugMemory', false),
                 virtualMode: getVirtualMode(config),
-                mathRenderer
+                mathRenderer,
+                previewTheme
             }
         });
     }

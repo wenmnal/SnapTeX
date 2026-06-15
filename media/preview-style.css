@@ -7,6 +7,59 @@
     --content-max-width: 3000px;
 }
 
+/*
+ * Preview theme override. When `data-snaptex-theme` is "light" or "dark",
+ * we redefine the same `--vscode-...` variables the rest of the stylesheet
+ * already reads from, so every existing rule picks up the new palette
+ * without per-rule changes. "auto" leaves VS Code's own variables alone.
+ */
+html[data-snaptex-theme="light"] {
+    --vscode-editor-foreground: #1f1f1f;
+    --vscode-editor-background: #ffffff;
+    --vscode-editorWidget-background: #f3f3f3;
+    --vscode-editorWidget-border: #d4d4d4;
+    --vscode-textLink-foreground: #0066cc;
+    --vscode-textLink-activeForeground: #004c99;
+    --vscode-editor-wordHighlightBackground: rgba(255, 220, 90, 0.55);
+    --vscode-descriptionForeground: #4a4a4a;
+    color-scheme: light;
+}
+
+html[data-snaptex-theme="dark"] {
+    --vscode-editor-foreground: #e4e4e4;
+    --vscode-editor-background: #1e1e1e;
+    --vscode-editorWidget-background: #252526;
+    --vscode-editorWidget-border: #3c3c3c;
+    --vscode-textLink-foreground: #4ea1ff;
+    --vscode-textLink-activeForeground: #82bbff;
+    --vscode-editor-wordHighlightBackground: rgba(255, 213, 75, 0.30);
+    --vscode-descriptionForeground: #a0a0a0;
+    color-scheme: dark;
+}
+
+.snaptex-theme-toggle {
+    position: fixed;
+    top: 10px;
+    right: 14px;
+    z-index: 9999;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--vscode-editorWidget-border, #888);
+    border-radius: 50%;
+    background: var(--vscode-editorWidget-background, rgba(0,0,0,0.05));
+    color: var(--vscode-editor-foreground);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 30px;
+    text-align: center;
+    padding: 0;
+    user-select: none;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    opacity: 0.55;
+    transition: opacity 0.15s;
+}
+.snaptex-theme-toggle:hover { opacity: 1; }
+
 body {
     font-family: "Times New Roman", "Cambria", "Latin Modern Roman", "Georgia", serif;
     padding: 1em 1em; /* Use em instead of fixed px for padding */

@@ -187,6 +187,16 @@ export function activate(context: vscode.ExtensionContext) {
         if (editor) { triggerSyncToPreview(editor, editor.selection.active.line, false, activeCursorScreenRatio, editor.selection.active.character); }
     }));
 
+    context.subscriptions.push(vscode.commands.registerCommand('snaptex.toggleTheme', async () => {
+        const config = vscode.workspace.getConfiguration('snaptex');
+        const order = ['auto', 'light', 'dark'] as const;
+        const current = config.get<string>('previewTheme', 'auto');
+        const idx = order.indexOf(current as typeof order[number]);
+        const next = order[(idx === -1 ? 0 : idx + 1) % order.length];
+        await config.update('previewTheme', next, vscode.ConfigurationTarget.Global);
+        vscode.window.setStatusBarMessage(`SnapTeX Preview Theme: ${next}`, 2000);
+    }));
+
     context.subscriptions.push(
         vscode.commands.registerCommand('snaptex.internal.revealLine', async (_uri: vscode.Uri, index: number, ratio: number, anchor: string, viewRatio: number = 0.5) => {
             startPreviewSyncLock();
@@ -302,6 +312,11 @@ export function activate(context: vscode.ExtensionContext) {
         if (editor && vscode.workspace.getConfiguration('snaptex').get<boolean>('renderOnSwitch', false)) {
             updatePreview(true);
         }
+    }));
+
+    context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
+        if (!e.affectsConfiguration('snaptex')) { return; }
+        TexPreviewPanel.currentPanel?.refreshConfig();
     }));
 
     if (vscode.window.registerWebviewPanelSerializer) {

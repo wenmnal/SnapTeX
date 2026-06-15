@@ -11,7 +11,8 @@ export const WebviewToExtensionCommand = {
     RevealLine: 'revealLine',
     SyncScroll: 'syncScroll',
     RequestPdf: 'requestPdf',
-    RequestBlockHtml: 'requestBlockHtml'
+    RequestBlockHtml: 'requestBlockHtml',
+    ToggleTheme: 'toggleTheme'
 } as const;
 
 export const ExtensionToWebviewCommand = {
@@ -53,12 +54,17 @@ export interface RequestBlockHtmlMessage {
     hash: string;
 }
 
+interface ToggleThemeMessage {
+    command: typeof WebviewToExtensionCommand.ToggleTheme;
+}
+
 type WebviewToExtensionMessage =
     | WebviewLoadedMessage
     | RevealLineMessage
     | SyncScrollMessage
     | RequestPdfMessage
-    | RequestBlockHtmlMessage;
+    | RequestBlockHtmlMessage
+    | ToggleThemeMessage;
 
 interface UpdateMessage {
     command: typeof ExtensionToWebviewCommand.Update;
@@ -98,6 +104,7 @@ interface ConfigMessage {
         debugMemory: boolean;
         virtualMode: boolean;
         mathRenderer: 'katex' | 'mathjax';
+        previewTheme: 'auto' | 'light' | 'dark';
     };
 }
 
@@ -139,6 +146,8 @@ export function isWebviewToExtensionMessage(value: unknown): value is WebviewToE
             return typeof value.id === 'string'
                 && typeof value.index === 'number'
                 && typeof value.hash === 'string';
+        case WebviewToExtensionCommand.ToggleTheme:
+            return true;
         default:
             return false;
     }

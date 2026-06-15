@@ -210,6 +210,7 @@ export function extractMetadata(text: string): MetadataResult {
     let title: string | undefined;
     let author: string | undefined;
     let date: string | undefined;
+    let affiliation: string | undefined;
 
     const titleRes = findCommand(cleanedText, 'title');
     if (titleRes) {
@@ -217,16 +218,49 @@ export function extractMetadata(text: string): MetadataResult {
         cleanedText = cleanedText.substring(0, titleRes.start) + cleanedText.substring(titleRes.end);
     }
 
-    const authorRes = findCommand(cleanedText, 'author');
-    if (authorRes) {
-        author = authorRes.content;
-        cleanedText = cleanedText.substring(0, authorRes.start) + cleanedText.substring(authorRes.end);
+    // REVTeX-style \author{...} can appear multiple times; collect into one block.
+    // Each author may be followed by an \email{...} on the same line; fold into the author label.
+    const authorParts: string[] = [];
+    while (true) {
+        const next = findCommand(cleanedText, 'author');
+        if (!next) { break; }
+        let entry = next.content.trim();
+        let consumeEnd = next.end;
+
+        const tail = cleanedText.substring(next.end);
+        const emailMatch = tail.match(/^\s*\\email\s*\{([^}]*)\}/);
+        if (emailMatch) {
+            const emailAddr = emailMatch[1].trim();
+            if (emailAddr) {
+                entry += ` (${emailAddr})`;
+            }
+            consumeEnd = next.end + emailMatch[0].length;
+        }
+
+        if (entry) { authorParts.push(entry); }
+        cleanedText = cleanedText.substring(0, next.start) + cleanedText.substring(consumeEnd);
+    }
+    if (authorParts.length > 0) {
+        author = authorParts.join(', ');
     }
 
     const dateRes = findCommand(cleanedText, 'date');
     if (dateRes) {
         date = dateRes.content;
         cleanedText = cleanedText.substring(0, dateRes.start) + cleanedText.substring(dateRes.end);
+    }
+
+    // REVTeX-style \affiliation{...}; can also appear multiple times.
+    const affParts: string[] = [];
+    while (true) {
+        const next = findCommand(cleanedText, 'affiliation');
+        if (!next) { break; }
+        const content = next.content.replace(/\\\\/g, '<br/>').trim();
+        if (content) { affParts.push(content); }
+        cleanedText = cleanedText.substring(0, next.start) + cleanedText.substring(next.end);
+    }
+    if (affParts.length > 0) {
+        affiliation = affParts.join('<br/>');
     }
 
     const tikzGlobalParts: string[] = [];
@@ -261,5 +295,5 @@ export function extractMetadata(text: string): MetadataResult {
 
     const tikzGlobal = tikzGlobalParts.join('\n');
     cleanedText = blankOutRanges(cleanedText, definitionRecords);
-    return { data: { macros, tikzGlobal, tikzMacroMap, title, author, date }, cleanedText };
+    return { data: { macros, tikzGlobal, tikzMacroMap, title, author, date, affiliation }, cleanedText };
 }

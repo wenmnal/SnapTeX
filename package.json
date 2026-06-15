@@ -60,6 +60,11 @@
         "command": "snaptex.syncToPreview",
         "title": "SnapTeX: Sync to Preview",
         "category": "SnapTeX"
+      },
+      {
+        "command": "snaptex.toggleTheme",
+        "title": "SnapTeX: Toggle Preview Theme (Auto / Light / Dark)",
+        "category": "SnapTeX"
       }
     ],
     "menus": {
@@ -145,6 +150,21 @@
           "enumDescriptions": [
             "KaTeX — fast, lightweight math renderer (default)",
             "MathJax — broader LaTeX compatibility, supports physics and more packages"
+          ]
+        },
+        "snaptex.previewTheme": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "light",
+            "dark"
+          ],
+          "default": "auto",
+          "description": "Preview color theme. 'auto' follows the active VS Code theme; 'light' and 'dark' force the preview to a fixed palette independent of the editor.",
+          "enumDescriptions": [
+            "Auto — follow the current VS Code editor theme",
+            "Light — force a light preview palette",
+            "Dark — force a dark preview palette"
           ]
         }
       }

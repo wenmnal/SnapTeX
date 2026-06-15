@@ -444,8 +444,22 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             new TooltipManager();
 
             this.initPdfObserver();
+            this.injectThemeToggle();
             this.bindEvents();
             vscode.postMessage({ command: WebviewToExtensionCommand.WebviewLoaded });
+        }
+
+        injectThemeToggle() {
+            if (document.querySelector('.snaptex-theme-toggle')) return;
+            const btn = document.createElement('button');
+            btn.className = 'snaptex-theme-toggle';
+            btn.type = 'button';
+            btn.title = 'SnapTeX: cycle preview theme (Auto / Light / Dark)';
+            btn.textContent = '◐';
+            btn.addEventListener('click', () => {
+                vscode.postMessage({ command: WebviewToExtensionCommand.ToggleTheme });
+            });
+            document.body.appendChild(btn);
         }
 
         bindEvents() {
@@ -494,8 +508,16 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                     this.config.virtualMode = event.data.config.virtualMode !== false;
                     this.virtualization.setEnabled(event.data.config.virtualMode !== false);
                     this.updateVirtualizedBlocks({ allowUnmount: true });
+                    if (event.data.config && typeof event.data.config.previewTheme === 'string') {
+                        this.applyPreviewTheme(event.data.config.previewTheme);
+                    }
                     break;
             }
+        }
+
+        applyPreviewTheme(theme) {
+            const value = theme === 'light' || theme === 'dark' ? theme : 'auto';
+            document.documentElement.setAttribute('data-snaptex-theme', value);
         }
 
         handleUpdate(payload) {
