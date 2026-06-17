@@ -125,6 +125,12 @@ export function createFigureRule(): PreprocessRule {
                     return `<img src="LOCAL_IMG:${safePath}" style="max-width:100%; display:block; margin:0 auto;">`;
                 });
 
+                // Convert \\ line breaks (e.g. between two minipages) to <br/>.
+                // Done inside figure rule because the entire figure HTML is
+                // frozen into a protected token, so latex_linebreak (priority 185)
+                // can't reach \\ inside the figure.
+                body = body.replace(/\\\\(?:\s*\[[^\]]*\])?/g, '<br/>');
+
                 const finalHtml = `<div class="latex-figure" style="text-align: center; margin: 1em 0;">${body}${captionHtml}${hiddenHtml}</div>`;
                 return `\n\n${renderer.protectHtml('fig', finalHtml)}\n\n`;
             });

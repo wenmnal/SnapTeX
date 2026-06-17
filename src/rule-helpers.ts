@@ -4,6 +4,34 @@ import { escapeHtmlAttribute, resolveLatexStyles } from './utils';
 import { renderMathJax } from './mathjax-renderer';
 
 /**
+ * Built-in KaTeX macros for common LaTeX packages we don't otherwise support.
+ * Lets KaTeX render documents that use the `physics` package without crashing
+ * the entire formula. MathJax has its own `physics` package configuration.
+ */
+const KATEX_BUILTIN_MACROS: Record<string, string> = {
+    // physics package — minimal subset
+    '\\qty': '\\left(#1\\right)',
+    '\\Bqty': '\\left\\{#1\\right\\}',
+    '\\absolutevalue': '\\left|#1\\right|',
+    '\\abs': '\\left|#1\\right|',
+    '\\norm': '\\left\\|#1\\right\\|',
+    '\\eval': '\\left.#1\\right|',
+    '\\order': 'O(#1)',
+    '\\bra': '\\left\\langle#1\\right|',
+    '\\ket': '\\left|#1\\right\\rangle',
+    '\\braket': '\\left\\langle#1|#2\\right\\rangle',
+    '\\dd': '\\mathrm{d}',
+    '\\dv': '\\frac{\\mathrm{d}#1}{\\mathrm{d}#2}',
+    '\\pdv': '\\frac{\\partial#1}{\\partial#2}',
+    '\\grad': '\\vec{\\nabla}',
+    '\\curl': '\\vec{\\nabla}\\times',
+    '\\Tr': '\\operatorname{Tr}',
+    '\\tr': '\\operatorname{tr}',
+    // slashed package
+    '\\slashed': '\\not{#1}',
+};
+
+/**
  * Renders TeX math through KaTeX or MathJax and protects the generated HTML from Markdown.
  */
 export function renderMath(tex: string, displayMode: boolean, renderer: RenderContext): string {
@@ -17,9 +45,10 @@ export function renderMath(tex: string, displayMode: boolean, renderer: RenderCo
     }
     // existing KaTeX code unchanged
     try {
+        const macros = { ...KATEX_BUILTIN_MACROS, ...renderer.currentMacros };
         const html = katex.renderToString(tex, {
             displayMode: displayMode,
-            macros: renderer.currentMacros,
+            macros: macros,
             throwOnError: false,
             errorColor: '#cc0000',
             globalGroup: true,

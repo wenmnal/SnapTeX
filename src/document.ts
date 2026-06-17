@@ -147,6 +147,17 @@ export class LatexDocument implements RenderDocumentView {
                  bodyText = metaRes.cleanedText.substring(startIndex, endIndex);
              }
         }
+
+        // Normalize \section{...}\label{...}\n\n\makesectionpage → keep them adjacent
+        // so the beamer_frame rule can render the section title on the section page.
+        // Beamer authors often put a blank line between them; the splitter would otherwise
+        // place them in different blocks. Replace any whitespace (including blank lines)
+        // between the section command and \makesectionpage with a single space.
+        bodyText = bodyText.replace(
+            /(\\section(?:\[[^\]]*\])?\s*\{(?:[^{}]|\{[^{}]*\})*\}(?:\s*\\label\s*\{[^}]+\})?)\s*\\makesectionpage\b/g,
+            '$1 \\makesectionpage'
+        );
+
         const rawBlockObjects = LatexBlockSplitter.split(bodyText);
 
         const res: DocumentParseResult = {

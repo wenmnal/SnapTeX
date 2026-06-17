@@ -161,12 +161,19 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
 
                 finalMath = replaceMathRefs(finalMath, renderer);
 
-                if (envName && renderer.mathRenderer !== 'mathjax') {
+                if (envName) {
                     const name = envName.toLowerCase();
-                    if (['align', 'flalign', 'alignat', 'multline'].includes(name)) {
-                        finalMath = `\\begin{aligned}\n${finalMath}\n\\end{aligned}`;
-                    } else if (name === 'gather') {
-                        finalMath = `\\begin{gathered}\n${finalMath}\n\\end{gathered}`;
+                    if (renderer.mathRenderer === 'mathjax') {
+                        // MathJax natively supports align/gather/equation/etc.
+                        // Pass the original environment back so MathJax handles it.
+                        finalMath = `\\begin{${name}${star || ''}}\n${finalMath}\n\\end{${name}${star || ''}}`;
+                    } else {
+                        // KaTeX doesn't support align as a top-level env; wrap in aligned/gathered.
+                        if (['align', 'flalign', 'alignat', 'multline'].includes(name)) {
+                            finalMath = `\\begin{aligned}\n${finalMath}\n\\end{aligned}`;
+                        } else if (name === 'gather') {
+                            finalMath = `\\begin{gathered}\n${finalMath}\n\\end{gathered}`;
+                        }
                     }
                 }
 
@@ -458,12 +465,113 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         name: 'minipage',
         priority: 117,
         apply: (text, renderer: RenderContext) => {
-            const minipageRegex = /\\begin\{minipage\}(?:\[([tcb])\])?(?:\[(\d+(?:\.\d+)?(?:pt|em|ex|cm|mm|in|px|%))?\])?\{((?:\d+(?:\.\d+)?)[^\}]*)\}([\s\S]*?)\\end\{minipage\}/g;
-            return text.replace(minipageRegex, (_match, pos, _height, width, content) => {
-                const vAlign = pos === 't' ? 'top' : pos === 'b' ? 'bottom' : 'middle';
-                const cssWidth = width.trim();
-                return `\n\n${renderer.protectHtml('minipage', `<div style="display:inline-block; vertical-align:${vAlign}; width:${cssWidth};" class="latex-minipage">${content.trim()}</div>`)}\n\n`;
-            });
+            // Convert LaTeX width specifications to CSS widths.
+            // \textwidth, \linewidth, \columnwidth → percentage of container.
+            // Examples:
+            //   0.54\textwidth → 54%
+            //   0.5\linewidth → 50%
+            //   3cm → 3cm (pass through)
+            //   100pt → 100pt (pass through)
+            const latexWidthToCss = (raw: string): string => {
+                const w = raw.trim();
+                // Match: <number><LaTeX-length-unit>
+                const m = w.match(/^([0-9]*\.?[0-9]+)\s*\\(textwidth|linewidth|columnwidth|hsize)$/);
+                if (m) {
+                    const pct = (parseFloat(m[1]) * 100).toFixed(1).replace(/\.0$/, '');
+                    return `${pct}%`;
+                }
+                // Bare \textwidth (no multiplier) → 100%
+                if (/^\\(textwidth|linewidth|columnwidth|hsize)$/.test(w)) {
+                    return '100%';
+                }
+                // Pass through CSS-compatible units (cm, mm, pt, em, ex, in, px, %).
+                if (/^[0-9]*\.?[0-9]+\s*(cm|mm|pt|em|ex|in|px|%)?$/.test(w)) {
+                    return w.replace(/\s+/g, '') || '100%';
+                }
+                // Fallback: try to strip LaTeX command parts
+                return w.replace(/\\[a-zA-Z]+/g, '').trim() || 'auto';
+            };
+
+            // Use brace-balanced parser to handle nested minipages and complex content.
+            // Walk text, find \begin{minipage}, parse optional args + width, then find matching \end{minipage}.
+            let result = '';
+            let cursor = 0;
+            const beginRe = /\\begin\{minipage\}/g;
+            let bMatch: RegExpExecArray | null;
+
+            while ((bMatch = beginRe.exec(text)) !== null) {
+                let pos = bMatch.index + bMatch[0].length;
+                // Skip optional [pos]
+                let vAlignSpec: string | undefined;
+                if (text[pos] === '[') {
+                    const close = text.indexOf(']', pos);
+                    if (close === -1) { continue; }
+                    vAlignSpec = text.substring(pos + 1, close).trim();
+                    pos = close + 1;
+                }
+                // Skip optional [height]
+                if (text[pos] === '[') {
+                    const close = text.indexOf(']', pos);
+                    if (close === -1) { continue; }
+                    pos = close + 1;
+                }
+                // Required {width}
+                if (text[pos] !== '{') { continue; }
+                let depth = 1;
+                const widthStart = pos + 1;
+                let i = widthStart;
+                while (i < text.length && depth > 0) {
+                    if (text[i] === '\\') { i += 2; continue; }
+                    if (text[i] === '{') { depth++; }
+                    else if (text[i] === '}') { depth--; }
+                    i++;
+                }
+                if (depth !== 0) { continue; }
+                const width = text.substring(widthStart, i - 1);
+                let bodyStart = i;
+
+                // Find matching \end{minipage} accounting for nesting
+                let bodyEnd = -1;
+                let nestDepth = 1;
+                const envRe = /\\(begin|end)\{minipage\}/g;
+                envRe.lastIndex = bodyStart;
+                let envMatch: RegExpExecArray | null;
+                while ((envMatch = envRe.exec(text)) !== null) {
+                    if (envMatch[1] === 'begin') { nestDepth++; }
+                    else {
+                        nestDepth--;
+                        if (nestDepth === 0) {
+                            bodyEnd = envMatch.index;
+                            envRe.lastIndex = envMatch.index + envMatch[0].length;
+                            break;
+                        }
+                    }
+                }
+                if (bodyEnd === -1) { continue; }
+
+                const bodyContent = text.substring(bodyStart, bodyEnd);
+                const endPos = envRe.lastIndex;
+
+                // Append text before the minipage
+                result += text.substring(cursor, bMatch.index);
+
+                const vAlign = vAlignSpec === 't' ? 'top' : vAlignSpec === 'b' ? 'bottom' : 'middle';
+                const cssWidth = latexWidthToCss(width);
+
+                // Use protectHtml for opening/closing tags so the body still flows
+                // through Markdown-it and gets its citations/refs/math processed.
+                const openTag = renderer.protectHtml(
+                    'minipage-open',
+                    `<div class="latex-minipage" style="display:inline-block; vertical-align:${vAlign}; width:${cssWidth}; box-sizing:border-box; padding:0 0.3em;">`
+                );
+                const closeTag = renderer.protectHtml('minipage-close', '</div>');
+                result += `\n\n${openTag}\n\n${bodyContent.trim()}\n\n${closeTag}\n\n`;
+
+                cursor = endPos;
+                beginRe.lastIndex = endPos;
+            }
+            result += text.substring(cursor);
+            return result;
         }
     },
 
@@ -528,50 +636,81 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
         name: 'beamer_frame',
         priority: 135,
         apply: (text, renderer: RenderContext) => {
-            // Check if this block contains a frame
-            const hasFrame = /\\begin\{frame\}/.test(text) || /\\end\{frame\}/.test(text);
-            if (!hasFrame) {
-                // Still need to handle \makesectionpage/\thankspage/\tableofcontents which can appear outside frames
-                text = text.replace(/\\makesectionpage\b/g, () => {
-                    return renderer.protectHtml('secpage', '<div class="beamer-section-page"><div class="beamer-section-page-inner"></div></div>');
-                });
-                text = text.replace(/\\sectionpage\b/g, () => {
-                    return renderer.protectHtml('secpage', '<div class="beamer-section-page"><div class="beamer-section-page-inner"></div></div>');
-                });
-                text = text.replace(/\\thankspage\s*\{([^}]*)\}/g, (_match, thanksText) => {
-                    const safe = escapeHtml(thanksText.trim());
-                    return `\n\n${renderer.protectHtml('thanks', `<div class="beamer-frame beamer-thanks-page"><span>${safe}</span></div>`)}\n\n`;
-                });
-                return text;
-            }
+            // Step 1: Render \section[short]{Long}\n\makesectionpage as a section divider page.
+            // Use a placeholder so this content survives the frame wrapping below.
+            const placeholders: { token: string; html: string }[] = [];
+            const placeholderId = (idx: number) => ` SECPAGE_${idx} `;
 
-            let frameTitle = '';
-            // Extract \frametitle{...}
-            const ftMatch = text.match(/\\frametitle\s*\{((?:[^{}]|\{[^{}]*\})*)\}/);
-            if (ftMatch) {
-                const titleContent = renderer.renderInline(
-                    resolveLatexStyles(ftMatch[1], html => renderer.protectHtml('style', html))
+            const sectionPageRegex = /\\section(?:\[[^\]]*\])?\s*\{((?:[^{}]|\{[^{}]*\})*)\}(?:\s*\\label\s*\{[^}]+\})?\s*\\makesectionpage\b/g;
+            text = text.replace(sectionPageRegex, (_match, title) => {
+                const safeTitle = renderer.renderInline(
+                    resolveLatexStyles(title.trim(), html => renderer.protectHtml('style', html))
                 );
-                frameTitle = `<div class="beamer-frame-title">${titleContent}</div>`;
-                text = text.replace(ftMatch[0], '');
-            }
-
-            // Strip \begin{frame}[...] / \end{frame}
-            text = text.replace(/\\begin\{frame\}(?:\[[^\]]*\])?/g, '');
-            text = text.replace(/\\end\{frame\}/g, '');
-
-            // Handle \tableofcontents — placeholder
-            text = text.replace(/\\tableofcontents\b/g, () => {
-                return renderer.protectHtml('toc', '<div class="beamer-toc-placeholder">Table of Contents</div>');
+                const html = renderer.protectHtml('secpage', `<div class="beamer-frame beamer-section-page"><div class="beamer-section-page-inner"><div class="beamer-section-page-title">${safeTitle}</div></div></div>`);
+                const idx = placeholders.length;
+                placeholders.push({ token: placeholderId(idx), html: `\n\n${html}\n\n` });
+                return placeholderId(idx);
             });
 
-            // Wrap entire frame content in a .beamer-frame container marker.
-            // The opening tag and closing tag must survive Markdown-it; protect them.
-            const openTag = renderer.protectHtml('frame-open', '<div class="beamer-frame">');
-            const closeTag = renderer.protectHtml('frame-close', '</div>');
-            const titlePart = frameTitle ? renderer.protectHtml('frametitle', frameTitle) : '';
+            // Standalone \makesectionpage (no preceding \section) — empty section page.
+            text = text.replace(/\\makesectionpage\b/g, () => {
+                const html = renderer.protectHtml('secpage', '<div class="beamer-frame beamer-section-page"><div class="beamer-section-page-inner"></div></div>');
+                const idx = placeholders.length;
+                placeholders.push({ token: placeholderId(idx), html: `\n\n${html}\n\n` });
+                return placeholderId(idx);
+            });
 
-            return `\n\n${openTag}${titlePart}\n\n${text.trim()}\n\n${closeTag}\n\n`;
+            // \sectionpage (rare in user code)
+            text = text.replace(/\\sectionpage\b/g, () => {
+                const html = renderer.protectHtml('secpage', '<div class="beamer-section-page"><div class="beamer-section-page-inner"></div></div>');
+                const idx = placeholders.length;
+                placeholders.push({ token: placeholderId(idx), html: html });
+                return placeholderId(idx);
+            });
+
+            // \thankspage{Thanks}
+            text = text.replace(/\\thankspage\s*\{([^}]*)\}/g, (_match, thanksText) => {
+                const safe = escapeHtml(thanksText.trim());
+                const html = renderer.protectHtml('thanks', `<div class="beamer-frame beamer-thanks-page"><span>${safe}</span></div>`);
+                const idx = placeholders.length;
+                placeholders.push({ token: placeholderId(idx), html: `\n\n${html}\n\n` });
+                return placeholderId(idx);
+            });
+
+            // Step 2: Frame processing
+            const hasFrame = /\\begin\{frame\}/.test(text) || /\\end\{frame\}/.test(text);
+            if (hasFrame) {
+                let frameTitle = '';
+                const ftMatch = text.match(/\\frametitle\s*\{((?:[^{}]|\{[^{}]*\})*)\}/);
+                if (ftMatch) {
+                    const titleContent = renderer.renderInline(
+                        resolveLatexStyles(ftMatch[1], html => renderer.protectHtml('style', html))
+                    );
+                    frameTitle = `<div class="beamer-frame-title">${titleContent}</div>`;
+                    text = text.replace(ftMatch[0], '');
+                }
+
+                text = text.replace(/\\begin\{frame\}(?:\[[^\]]*\])?/g, '');
+                text = text.replace(/\\end\{frame\}/g, '');
+
+                text = text.replace(/\\tableofcontents\b/g, () => {
+                    return renderer.protectHtml('toc', '<div class="beamer-toc-placeholder">Table of Contents</div>');
+                });
+
+                const openTag = renderer.protectHtml('frame-open', '<div class="beamer-frame">');
+                const closeTag = renderer.protectHtml('frame-close', '</div>');
+                const titlePart = frameTitle ? renderer.protectHtml('frametitle', frameTitle) : '';
+
+                text = `\n\n${openTag}${titlePart}\n\n${text.trim()}\n\n${closeTag}\n\n`;
+            }
+
+            // Step 3: Restore placeholders OUTSIDE any frame wrapper.
+            // Each section page / thanks page becomes a sibling of the frame, not a child.
+            for (const { token, html } of placeholders) {
+                text = text.replace(token, html);
+            }
+
+            return text;
         }
     },
 
@@ -589,7 +728,11 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 const safeTitle = renderer.renderInline(
                     resolveLatexStyles(title.trim(), html => renderer.protectHtml('style', html))
                 );
-                return `\n\n${renderer.protectHtml(envName, `<div class="${blockClass}"><div class="beamer-block-title">${safeTitle}</div><div class="beamer-block-body">${content.trim()}</div></div>`)}\n\n`;
+                // Split open/close tags so body content (including \\, \cite, math)
+                // continues through the rule pipeline (latex_linebreak, citations, etc.).
+                const openOuter = renderer.protectHtml(`${envName}-open`, `<div class="${blockClass}"><div class="beamer-block-title">${safeTitle}</div><div class="beamer-block-body">`);
+                const closeOuter = renderer.protectHtml(`${envName}-close`, `</div></div>`);
+                return `\n\n${openOuter}\n\n${content.trim()}\n\n${closeOuter}\n\n`;
             });
         }
     },
@@ -728,6 +871,19 @@ export const DEFAULT_PREPROCESS_RULES: PreprocessRule[] = [
                 }
                 return match;
             });
+        }
+    },
+
+    {
+        name: 'latex_linebreak',
+        priority: 185,
+        apply: (text, renderer: RenderContext) => {
+            // Convert LaTeX line break \\ (or \\[length]) to HTML <br/>.
+            // By this priority (185), all math envs ($..$, $$..$$, \[..\],
+            // equation/align/etc.) and tables/figures are already protected
+            // into XSNAP tokens. Anything still containing literal \\ is
+            // genuine line-break text (in minipages, blocks, frame body).
+            return text.replace(/\\\\(?:\s*\[[^\]]*\])?/g, () => renderer.protectHtml('br', '<br/>'));
         }
     },
 

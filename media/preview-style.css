@@ -425,39 +425,89 @@ body.vscode-dark .tikz-container svg [fill="rgb(0, 0, 0)"] {
 
 
 /* --- Beamer Presentation --- */
+/* --- Beamer Presentation ---
+ * Beamer's default 16:9 slide is 12.8cm × 9.6cm at 10pt body font.
+ * We approximate that aspect ratio at the preview's container width and
+ * scale the body font of each slide proportionally so a "small" / "Large"
+ * inside the slide matches the visual weight of beamer's output.
+ */
 .beamer-frame {
-    /* Each frame is rendered as its own slide-like card */
-    margin: 1em 0 2em 0;
-    padding: 1.2em 1.5em 2em 1.5em;
+    /* 16:9 aspect ratio container — width fills available space */
+    margin: 1.2em 0 1.6em 0;
+    padding: 1.6em 2em;
     border: 1px solid var(--snaptex-widget-border, var(--vscode-editorWidget-border, #ccc));
     border-radius: 8px;
     background-color: var(--snaptex-bg, var(--vscode-editor-background));
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.10);
     position: relative;
     page-break-after: always;
     break-after: page;
+    /* Lock the frame to a 16:9 aspect ratio regardless of content height.
+     * Using min-aspect-ratio so very tall content can still expand
+     * (we'd rather see overflow than truncate the user's text). */
+    min-height: calc((100% - 4em) * 9 / 16);
+    /* Scale body font down — beamer 10pt body in a 12.8cm slide is small */
+    font-size: 0.92em;
+    line-height: 1.35;
+    box-sizing: border-box;
 }
 
 .beamer-frame::before {
     content: "Slide";
     position: absolute;
-    top: 0.5em;
+    top: 0.6em;
     right: 1em;
-    font-size: 0.75em;
+    font-size: 0.65em;
     color: var(--snaptex-muted, var(--vscode-descriptionForeground));
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.06em;
     font-weight: 600;
 }
 
 .beamer-frame-title {
-    font-size: 1.5em;
+    /* Beamer \frametitle uses \large bold serif by default */
+    font-size: 1.4em;
     font-weight: bold;
-    margin-bottom: 0.8em;
-    padding-bottom: 0.3em;
+    margin: 0 0 0.7em 0;
+    padding-bottom: 0.25em;
     border-bottom: 2px solid;
     border-color: var(--vscode-textLink-foreground, #0066cc);
     color: var(--vscode-textLink-foreground, #0066cc);
+}
+
+/* Frame body paragraphs — tighter spacing than the rest of the document */
+.beamer-frame > p,
+.beamer-frame > div > p {
+    margin: 0.4em 0;
+}
+.beamer-frame ul,
+.beamer-frame ol {
+    margin: 0.4em 0;
+    padding-left: 1.6em;
+}
+.beamer-frame li {
+    margin: 0.2em 0;
+}
+/* Math inside frames — beamer typically uses display style */
+.beamer-frame .katex-display,
+.beamer-frame mjx-container[display="true"] {
+    margin: 0.5em 0;
+    font-size: 0.95em;
+}
+/* Inline math should not jump off the line height */
+.beamer-frame .katex {
+    font-size: 1em;
+}
+/* Captions inside beamer-frame (figure/table) are smaller */
+.beamer-frame .figure-caption,
+.beamer-frame .table-caption,
+.beamer-frame .alg-caption {
+    font-size: 0.85em;
+    margin-top: 0.3em;
+}
+/* Block titles inside frames stay compact */
+.beamer-frame .beamer-block {
+    margin: 0.6em 0;
 }
 .beamer-block {
     margin: 0.8em 0;
@@ -503,6 +553,13 @@ body.vscode-dark .tikz-container svg [fill="rgb(0, 0, 0)"] {
     border-bottom: 2px solid;
     border-color: var(--vscode-textLink-foreground, #0066cc);
 }
+.beamer-section-page-title {
+    font-size: 2em;
+    font-weight: bold;
+    color: var(--vscode-textLink-foreground, #0066cc);
+    margin: 0;
+    line-height: 1.4;
+}
 
 /* Beamer thanks page */
 .beamer-thanks-page {
@@ -519,16 +576,34 @@ body.vscode-dark .tikz-container svg [fill="rgb(0, 0, 0)"] {
     color: var(--snaptex-muted, var(--vscode-descriptionForeground));
 }
 
-/* Minipage (side-by-side columns) */
+/* Minipage (side-by-side columns)
+ * LaTeX minipages with widths summing to ~1.0\textwidth (e.g. 0.54 + 0.45)
+ * are designed to sit side-by-side. With `display:inline-block` the whitespace
+ * between adjacent elements adds extra width and bumps the second column to a
+ * new line. Use a tiny letter-spacing trick on parent paragraphs, or rely on
+ * the wrapper having no whitespace nodes.
+ *
+ * Practical fix: subtract a small allowance from each minipage so two with
+ * widths 0.54+0.45=99% still fit. The padding gives visual gutter.
+ */
 .latex-minipage {
     box-sizing: border-box;
-    padding: 0 0.5em;
+    padding: 0 0.3em;
+    /* Allow long lines (URLs, math) to break inside */
+    overflow-wrap: break-word;
+    word-break: normal;
 }
-.latex-minipage:first-child {
-    padding-left: 0;
+.latex-minipage > p:first-child {
+    margin-top: 0;
 }
-.latex-minipage:last-child {
-    padding-right: 0;
+.latex-minipage > p:last-child {
+    margin-bottom: 0;
+}
+/* Make sure images inside minipage scale to fit */
+.latex-minipage img,
+.latex-minipage canvas {
+    max-width: 100%;
+    height: auto;
 }
 
 
