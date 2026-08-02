@@ -1,5 +1,3 @@
-/* preview_style.css - Performance Optimized Refactored Version */
-
 :root {
     /* JS converts this vw value to a physical px value to eliminate calc jitter during resizing */
     --base-font-size: clamp(12px, 2.35vw, 40px);
@@ -151,7 +149,7 @@ html[data-snaptex-theme="dark"] .hover-tooltip .target-block {
 
 body {
     font-family: "Times New Roman", "Cambria", "Latin Modern Roman", "Georgia", serif;
-    padding: 1em 1em; /* Use em instead of fixed px for padding */
+    padding: 1em 1em;
     margin: 0 auto;
     max-width: var(--content-max-width);
     font-size: var(--base-font-size);
@@ -159,16 +157,13 @@ body {
     color: var(--vscode-editor-foreground);
     background-color: var(--vscode-editor-background);
 
-    /* Optimized text justification */
     text-align: justify;
     text-justify: auto;
 
-    /* Enable automatic hyphenation (Crucial for justification) */
     hyphens: manual;
     -webkit-hyphens: manual;
     -moz-hyphens: manual;
 
-    /* Fallback: Prevent URLs or long words from breaking the layout */
     word-wrap: break-word;
     overflow-wrap: break-word;
 }
@@ -182,7 +177,7 @@ h1, h2, h3, h4 {
 
 /* Paper Title \title */
 h1.latex-title {
-    font-size: 1.7em; /* Roughly equivalent to previous calc(* 1.5) but slightly emphasized */
+    font-size: 1.7em;
     text-align: center;
     margin-bottom: 0.5em;
     margin-top: 0.5em;
@@ -192,11 +187,34 @@ h1.latex-title {
 div.latex-author {
     font-size: 1.1em;
     text-align: center;
-    margin-bottom: 0;
+    margin-bottom: 0.25em;
     font-style: italic;
 }
 
-/* Date Info \author */
+.latex-author-item {
+    display: inline-block;
+    margin: 0 0.55em 0.35em;
+    text-align: center;
+    vertical-align: top;
+}
+
+.latex-author-email {
+    display: block;
+    font-size: 0.86em;
+    font-style: normal;
+}
+
+.latex-affiliations {
+    text-align: center;
+    margin-bottom: 0.75em;
+}
+
+.latex-editor {
+    text-align: left;
+    margin-bottom: 0.75em;
+}
+
+/* Date Info \date */
 div.latex-date {
     font-size: 1.1em;
     text-align: center;
@@ -310,31 +328,24 @@ mjx-container[jax="SVG"] > svg {
 
 /* TikZ Container */
 .tikz-container {
-    /* [CHANGED] Switch to block layout. Flexbox sometimes respects SVG intrinsic 'pt' width too stubbornly. */
     display: flex;
-    justify-content: center; /* Horizontally center */
-    align-items: center;     /* Vertically center */
+    justify-content: center;
+    align-items: center;
     width: 100%;
     margin: 0 0;
     text-align: center;
-    overflow: visible; /* Allow content to stretch */
+    overflow: visible;
 }
 
-/* Ensure SVG scales responsively and FILLS width */
 .tikz-container svg {
-    /* [CRITICAL] Force width to match container (window) width */
     width: 100% !important;
-    /* [CRITICAL] Auto height uses the viewBox aspect ratio, ignoring the 'height=35pt' attribute */
     height: auto !important;
 
-    /* Ensure it behaves like a block element to fill space */
     display: flex;
     margin: 0 auto;
 
-    /* Remove any potential max-width limits */
     max-width: none !important;
 
-    /* Color inheritance */
     color: var(--vscode-editor-foreground);
     text-align: center;
 }
@@ -361,36 +372,34 @@ mjx-container[jax="SVG"] > svg {
 */
 
 /* 1. Invert Black Strokes (Lines, Arrows, Borders) */
-body.vscode-dark .tikz-container svg [stroke="#000"],
-body.vscode-dark .tikz-container svg [stroke="black"],
-body.vscode-dark .tikz-container svg [stroke="rgb(0,0,0)"],
-body.vscode-dark .tikz-container svg [stroke="rgb(0, 0, 0)"] {
+body:is(.vscode-dark, [data-theme="dark"]) .tikz-container svg [stroke="#000"],
+body:is(.vscode-dark, [data-theme="dark"]) .tikz-container svg [stroke="black"],
+body:is(.vscode-dark, [data-theme="dark"]) .tikz-container svg [stroke="rgb(0,0,0)"],
+body:is(.vscode-dark, [data-theme="dark"]) .tikz-container svg [stroke="rgb(0, 0, 0)"] {
     stroke: var(--vscode-editor-foreground) !important;
 }
 
 /* 2. Invert Black Fills (Text, Solid Shapes) */
 /* Note: Pattern fills use url(#id), so they won't match these selectors, which is good. */
-/* body.vscode-dark .tikz-container svg [fill="#000"],
-body.vscode-dark .tikz-container svg [fill="black"],
-body.vscode-dark .tikz-container svg [fill="rgb(0,0,0)"],
-body.vscode-dark .tikz-container svg [fill="rgb(0, 0, 0)"] {
+body:is(.vscode-dark, [data-theme="dark"]) .tikz-container svg [fill="#000"],
+body:is(.vscode-dark, [data-theme="dark"]) .tikz-container svg [fill="black"],
+body:is(.vscode-dark, [data-theme="dark"]) .tikz-container svg [fill="rgb(0,0,0)"],
+body:is(.vscode-dark, [data-theme="dark"]) .tikz-container svg [fill="rgb(0, 0, 0)"] {
     fill: var(--vscode-editor-foreground) !important;
-} */
+}
 
 /* 3. Ensure Text elements default to foreground if no fill is specified */
-/* body.vscode-dark .tikz-container svg text {
+body:is(.vscode-dark, [data-theme="dark"]) .tikz-container svg text {
     fill: var(--vscode-editor-foreground);
-} */
+}
 
 /* ==========================================================================
    Theorem Blocks (Theme-Adaptive Box)
    ========================================================================== */
 
 .latex-theorem {
-    /* [MAGIC] 混合 10% 的主题色与 90% 的透明度，生成极浅的背景 */
+    /* Keep theorem boxes readable across host themes without hard-coded colors. */
     background-color: color-mix(in srgb, var(--vscode-textLink-foreground) 10%, transparent);
-
-    /* 边框直接使用 100% 的主题色 */
     border-left: 4px solid color-mix(in srgb, var(--vscode-textLink-foreground) 40%, transparent);
 
     padding: 10px 15px;
@@ -400,10 +409,12 @@ body.vscode-dark .tikz-container svg [fill="rgb(0, 0, 0)"] {
     page-break-inside: avoid;
 }
 
-/* Header Styling */
 .latex-theorem-header {
-    /* 标题颜色与边框保持一致 */
     color: var(--vscode-textLink-foreground);
+}
+
+.latex-style-scope .latex-theorem-header {
+    color: inherit;
 }
 
 /* Paragraph handling inside theorem */
@@ -614,20 +625,37 @@ body.vscode-dark .tikz-container svg [fill="rgb(0, 0, 0)"] {
     background-color: rgba(255, 120, 117, 0.05);
     color: #cf1322;
     padding: 1em;
-    margin: 1.5em 0; /* Fixed previous incorrect calc(...)em syntax */
+    margin: 1.5em 0;
     border-radius: 6px;
     font-family: "Courier New", monospace;
-    font-size: 0.7em; /* Slightly reduce source code display size */
+    font-size: 0.7em;
     line-height: 1.0;
     white-space: pre-wrap;
     overflow-x: auto;
 }
 
+/* Verbatim/code blocks */
+.latex-verbatim {
+    display: block;
+    margin: 1em 0;
+    padding: 0.85em 1em;
+    border: 1px solid var(--vscode-widget-border, rgba(127, 127, 127, 0.35));
+    border-radius: 6px;
+    background-color: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.10));
+    overflow-x: auto;
+    white-space: pre;
+}
+
+.latex-verbatim code {
+    font-family: var(--vscode-editor-font-family, "Courier New", monospace);
+    font-size: 0.86em;
+}
+
 /* Algorithm Block Styles */
 .latex-algorithm {
     margin: 1.5em 0;
-    border-top: 2px solid black;
-    border-bottom: 2px solid black;
+    border-top: 2px solid var(--vscode-editor-foreground);
+    border-bottom: 2px solid var(--vscode-editor-foreground);
     padding: 10px;
 }
 
@@ -659,16 +687,29 @@ body.vscode-dark .tikz-container svg [fill="rgb(0, 0, 0)"] {
     padding-left: 5px; /* Standard indentation/padding */
 }
 
-/* Items without markers (Input/Output/Require/Ensure) */
-/* These items should override the parent list's numbering */
-.latex-algorithm .alg-item.alg-item-no-marker {
-    list-style: none;
-    padding-left: 0; /* Align with the bullet/number position usually */
-    /* If you want them indented same as text, keep padding-left: 5px or remove this line */
-}
-
 .latex-figure { text-align: center; margin: 20px 0; }
 .latex-figure img { max-width: 100%; height: auto; }
+.latex-subfigure-grid {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.75em 1.2em;
+    align-items: flex-start;
+}
+.latex-subfigure {
+    box-sizing: border-box;
+    min-width: 12em;
+    text-align: center;
+}
+.latex-subfigure canvas,
+.latex-subfigure img {
+    width: 100%;
+}
+.subfigure-caption {
+    margin-top: 0.35em;
+    font-size: 0.92em;
+    line-height: 1.3;
+}
 
 /*
  * Old-style \subfigure[cap]{body}: a flex row of side-by-side panels under
@@ -737,6 +778,10 @@ body.vscode-dark .tikz-container svg [fill="rgb(0, 0, 0)"] {
     font-size: 0.94em;
     line-height: 1.35;
     color: var(--vscode-editor-foreground);
+}
+
+.latex-style-scope .latex-table table {
+    color: inherit;
 }
 
 .latex-table .latex-tabular-preview {
@@ -887,7 +932,12 @@ ol ol { list-style-type: lower-alpha; }
 ol ol ol { list-style-type: lower-roman; }
 
 /* Fix alignment for custom label lists (\item[Label]) */
-ul li strong:first-child {
+.latex-list-custom-label {
+    list-style: none;
+}
+
+.latex-list-label {
+    font-weight: 600;
     margin-right: 0.5em;
 }
 
@@ -941,8 +991,6 @@ ul li strong:first-child {
 }
 
 
-/* media/preview-style.css - Optimized & Fixed */
-
 /* --- Main Floating Window --- */
 .hover-tooltip {
     position: fixed;
@@ -951,11 +999,9 @@ ul li strong:first-child {
     display: flex;
     flex-direction: column;
 
-    /* [RESTORED] Initial Centering */
     left: 2vw;
     top: 0;
 
-    /* [FIX] Prevent size jumping during JS resize */
     box-sizing: border-box;
 
     /* Visuals */
@@ -976,7 +1022,7 @@ ul li strong:first-child {
     pointer-events: auto;
     opacity: 0;
     visibility: hidden;
-    transition: opacity 0.2s ease-in-out; /* Removed visibility transition for cleaner toggle */
+    transition: opacity 0.2s ease-in-out;
 
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
@@ -998,7 +1044,6 @@ ul li strong:first-child {
     cursor: grab;
     user-select: none;
     flex-shrink: 0;
-    /* Ensure header respects border radius of container */
     border-radius: 8px 8px 0 0;
 }
 
@@ -1039,7 +1084,6 @@ ul li strong:first-child {
     background-color: var(--vscode-toolbar-hoverBackground, rgba(90, 93, 94, 0.31));
 }
 
-/* [CLEANUP] Removed redundant styles from pin-btn */
 .pin-btn.active {
     color: var(--vscode-editor-background, white);
     background-color: var(--vscode-button-background, #007acc);
@@ -1052,13 +1096,12 @@ ul li strong:first-child {
 
 .tooltip-content {
     flex: 1;
-    padding: 12px 16px; /* 调整 padding，右侧留出合理空间 */
+    padding: 12px 16px;
     overflow-y: auto;
     overflow-x: hidden;
     font-size: 0.85em;
     line-height: 1.1;
-    /* [关键修复] 确保滚动条有自己独立的地盘，不与最右侧的 resize handle 抢占像素 */
-    margin-right: 1px; /* Space for scrollbar/handles */
+    margin-right: 1px;
     margin-bottom: 1px;
 }
 

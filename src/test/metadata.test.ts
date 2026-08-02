@@ -2,10 +2,13 @@
 
 import * as assert from 'assert';
 import { extractMetadata } from '../metadata';
+import { SNAP_TEX_RULES } from '../rules';
+
+const extract = (source: string) => extractMetadata(source, SNAP_TEX_RULES.metadataExtractors);
 
 suite('Metadata extraction', () => {
     test('extracts metadata, macros, TikZ globals, and TikZ macros', () => {
-        const result = extractMetadata([
+        const result = extract([
             '\\title{A \\\\ Title}',
             '\\author{Ada}',
             '\\date{\\today}',
@@ -23,8 +26,8 @@ suite('Metadata extraction', () => {
             '\\end{document}'
         ].join('\n'));
 
-        assert.equal(result.data.title, 'A <br/> Title');
-        assert.equal(result.data.author, 'Ada');
+        assert.equal(result.data.title, 'A \\\\ Title');
+        assert.equal(result.data.authors[0].name, 'Ada');
         assert.ok(result.data.date);
         assert.equal(result.data.macros['\\vect'], '\\mathbf{#1}');
         assert.equal(result.data.macros['\\oldmacro'], '\\mathrm{o}');
@@ -41,4 +44,106 @@ suite('Metadata extraction', () => {
         assert.doesNotMatch(result.cleanedText, /\\newcommand\{\\vect\}/);
         assert.doesNotMatch(result.cleanedText, /\\usetikzlibrary/);
     });
+
+    test('masks comments in extracted TikZ globals without creating TeX paragraphs', () => {
+        const result = extract([
+            '\\tikzset{',
+            '  dot/.style={circle},',
+            '  % comment inside pgfkeys',
+            '  pics/right angle/.append style={',
+            '    /tikz/draw',
+            '  }',
+            '}'
+        ].join('\n'));
+
+        assert.match(result.data.tikzGlobal, /\n\s*%\n\s*pics\/right angle/);
+        assert.doesNotMatch(result.data.tikzGlobal, /\n\s*\n\s*pics\/right angle/);
+    });
+
+    test('extracts journal-style author address groups', () => {
+        const result = extract([
+            '\\AuthorMark{Alice Stone, Brian Vale, and Cara Reed}',
+            '\\TitleMark{Sparse Canonical Analysis for Synthetic Models}',
+            '\\title{Sparse Canonical Analysis for Synthetic Models\\footnote{Funding note}}',
+            String.raw`\author{Alice \uppercase{Stone}}             %%%  1st Author information  %%%
+    {Address\\Department of Mathematics, Example North University, North City, Exampleland
+    E-mail\,$:alice.stone@example.edu$ }`,
+            String.raw`\author{Brian \uppercase{Vale}}{Address\\Institute of Applied Finance, Example River College, River City, Exampleland E-mail\,$:brian.vale@example.edu$ }`,
+            String.raw`\author{Cara \uppercase{Reed}}{Address\\School of Data Science, Example South Institute, South City, Exampleland\\ E-mail\,$:cara.reed@example.edu$ }`
+        ].join('\n'));
+
+        assert.deepStrictEqual(result.data.authors.map(author => author.name), ['Alice STONE', 'Brian VALE', 'Cara REED']);
+        assert.deepStrictEqual(result.data.authors.map(author => author.emails), [['alice.stone@example.edu'], ['brian.vale@example.edu'], ['cara.reed@example.edu']]);
+        assert.deepStrictEqual(result.data.authors.map(author => author.affiliationIds), [['1'], ['2'], ['3']]);
+        assert.deepStrictEqual(result.data.affiliations.map(affiliation => affiliation.text), [
+            'Department of Mathematics, Example North University, North City, Exampleland',
+            'Institute of Applied Finance, Example River College, River City, Exampleland',
+            'School of Data Science, Example South Institute, South City, Exampleland'
+        ]);
+        assert.equal(result.data.custom.authorMark, 'Alice Stone, Brian Vale, and Cara Reed');
+        assert.equal(result.data.custom.titleMark, 'Sparse Canonical Analysis for Synthetic Models');
+        assert.doesNotMatch(result.cleanedText, /\\AuthorMark/);
+        assert.doesNotMatch(result.cleanedText, /\\TitleMark/);
+        assert.doesNotMatch(result.cleanedText, /alice\.stone@example\.edu/);
+    });
+
+    test('extracts authblk shared affiliations and grouped emails', () => {
+        const result = extract([
+            '\\author[1]{Alice}',
+            '\\author[1]{Bob}',
+            '\\author[2]{Carol}',
+            '\\affil[1]{University A}',
+            '\\affil[2]{University B}'
+        ].join('\n'));
+
+        assert.deepStrictEqual(result.data.authors.map(author => author.name), ['Alice', 'Bob', 'Carol']);
+        assert.deepStrictEqual(result.data.authors.map(author => author.affiliationIds), [['1'], ['1'], ['2']]);
+        assert.deepStrictEqual(result.data.affiliations, [
+            { id: '1', text: 'University A' },
+            { id: '2', text: 'University B' }
+        ]);
+
+        const groupedEmail = extract([
+            '\\author[1]{Alice Smith}',
+            '\\author[2]{Bob Jones}',
+            '\\author[3]{Carol Lee}',
+            '\\email{alice@a.edu, bob@b.edu, carol@c.edu}',
+            '\\affil[1]{University A}',
+            '\\affil[2]{University B}',
+            '\\affil[3]{Institute C}'
+        ].join('\n'));
+
+        assert.deepStrictEqual(groupedEmail.data.authors.map(author => author.emails), [['alice@a.edu'], ['bob@b.edu'], ['carol@c.edu']]);
+
+        const affilText = extract([
+            String.raw`\author[1]{Alice Smith}`,
+            String.raw`\author[2]{Bob Jones}`,
+            String.raw`\author[3]{Carol Lee}`,
+            String.raw`\affil[1]{University A\\\texttt{alice@a.edu}}`,
+            String.raw`\affil[2]{University B\\\texttt{bob@b.edu}}`,
+            String.raw`\affil[3]{Institute C\\\texttt{carol@c.edu}}`
+        ].join('\n'));
+
+        assert.deepStrictEqual(affilText.data.authors.map(author => author.emails), [[], [], []]);
+        assert.deepStrictEqual(affilText.data.affiliations.map(affiliation => affiliation.text), [
+            String.raw`University A\\\texttt{alice@a.edu}`,
+            String.raw`University B\\\texttt{bob@b.edu}`,
+            String.raw`Institute C\\\texttt{carol@c.edu}`
+        ]);
+    });
+
+    test('extracts custom metadata through registry extractors', () => {
+        const result = extract([
+            '\\title{A Title}',
+            '\\editor{Prof. Smith}',
+            '\\begin{document}',
+            '\\maketitle',
+            '\\end{document}'
+        ].join('\n'));
+
+        assert.equal(result.data.title, 'A Title');
+        assert.equal(result.data.custom.editor, 'Prof. Smith');
+        assert.doesNotMatch(result.cleanedText, /\\editor/);
+    });
+
 });

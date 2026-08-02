@@ -6,7 +6,7 @@ src/**
 .gitignore
 .yarnrc
 esbuild.js
-vsc-extension-quickstart.md
+CHANGELOG.repo.md
 media/demo/*.gif
 **/tsconfig.json
 **/eslint.config.mjs
@@ -20,3 +20,11 @@ plan.md
 CLAUDE.md
 *.vsix
 !node_modules\@iktakahiro\markdown-it-katex\node_modules\katex\dist
+dist-web/**
+apps/**
+demo/**
+.github/**
+docs/**
+todo.md
+media/favicon.ico
+media/icon-*.png

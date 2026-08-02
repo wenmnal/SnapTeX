@@ -1,20 +1,64 @@
 import MarkdownIt from 'markdown-it';
 
 import { DiffEngine, DiffResult } from './diff';
-import { BlockNumberingCounts, BlockTextSnapshot, MathRendererType, NumberingPayload, PatchPayload, RenderContext, RenderedBlockMeta, RenderDocumentView, RenderOptions, SourceLocation } from './types';
-import { resetMathJax, getMathJaxCSS as getMathJaxCSSFromRenderer } from './mathjax-renderer';
-import { DEFAULT_PREPROCESS_RULES, postProcessHtml } from './rules';
-import { LatexCounterScanner } from './scanner';
-import { R_BIBLIOGRAPHY, R_ADDBIBRESOURCE } from './patterns';
-import { extractLatexCitationKeys, extractLatexLabelNames, normalizeUri, stableHash } from './utils';
+import { BlockNumberingCounts, BlockTextSnapshot, DependencyHelpers, DependencyState, MathRendererType, NumberingPayload, RenderContext, RenderDependency, RenderedBlockMeta, RenderDocumentView, RenderOptions, RenderPayload, RuleRegistry, SourceLocation } from './types';
+import { AST_SOURCE_HINT_KIND, type AstBlockArtifact } from './ast/block-metadata';
+import { renderLatexBlockWithAst } from './ast/renderer';
+import { createDefaultAstRenderContext } from './ast/rules';
+import { SNAP_TEX_RULES, postProcessHtml, renderCitationHtml } from './rules';
+import { LatexCounterScanner, type ScanResult } from './scanner';
+import { R_BIBLIOGRAPHY, R_ADDBIBRESOURCE, R_THEBIBLIOGRAPHY } from './patterns';
+import { extractLatexCitationKeys, extractLatexLabelNames, findNearestSyncAnchorLine, getBlockSpanText, lineAtOffset, normalizeUri, offsetAtLine, stableHash } from './utils';
 import { ProtectionManager } from './protection';
+import { renderIncludeGraphicsHtml } from './rule-floats';
+import { renderKatexHtml } from './rule-helpers';
+import { renderMathJax, resetMathJax } from './mathjax-renderer';
 
 const EMPTY_TEXT_SNAPSHOT: BlockTextSnapshot = { bodyText: "", blockSpans: [] };
-const PREPROCESS_RULES = [...DEFAULT_PREPROCESS_RULES].sort((a, b) => a.priority - b.priority);
+const SOURCE_SYNC_HINT_KINDS = new Set<number>([
+    AST_SOURCE_HINT_KIND.InlineMath,
+    AST_SOURCE_HINT_KIND.DisplayMath,
+    AST_SOURCE_HINT_KIND.Ref,
+    AST_SOURCE_HINT_KIND.Citation,
+    AST_SOURCE_HINT_KIND.Section,
+    AST_SOURCE_HINT_KIND.ListItem
+]);
 
 interface BlockSnapshot extends RenderedBlockMeta {
     hasBibliography: boolean;
     citationKeys: string[];
+    dependencyFingerprint?: string;
+}
+
+interface RenderBlockAccess {
+    getText(index: number): string;
+    setTextCacheEnabled(enabled: boolean): void;
+    hashBlocks: { hash: string }[];
+    provider: {
+        getBlockCount(): number;
+        getBlockText(index: number): string;
+        getBlockHash(index: number): string;
+    };
+}
+
+interface RenderPreparation {
+    blockCount: number;
+    blockAccess: RenderBlockAccess;
+    diff: DiffResult;
+    isFullUpdate: boolean;
+    macrosChanged: boolean;
+    numberingData: NumberingPayload;
+    blockMeta: BlockSnapshot[];
+    dirtyBlockIndices: number[];
+    nextTextSnapshot: BlockTextSnapshot;
+}
+
+interface RenderPreparationBase {
+    blockCount: number;
+    blockAccess: RenderBlockAccess;
+    diff: DiffResult;
+    isFullUpdate: boolean;
+    macrosChanged: boolean;
 }
 
 /**
@@ -22,42 +66,60 @@ interface BlockSnapshot extends RenderedBlockMeta {
  *
  * SmartRenderer owns the preview-side document model snapshot: block hashes,
  * source-line mapping, label numbering, citation state, and the Markdown
- * protection pass. It is deliberately stateless with respect to VS Code APIs;
- * panel.ts handles I/O and webview transport.
+ * protection pass. It is deliberately stateless with respect to host APIs;
+ * apps/* hosts handle I/O and preview transport.
  */
 export class SmartRenderer {
     private lastBlocks: BlockSnapshot[] = [];
     private lastTextSnapshot: BlockTextSnapshot = EMPTY_TEXT_SNAPSHOT;
-    private lastMetaFingerprint: string = "";
     private lastMacrosJson: string = "";
-    private lastCitedKeys: string[] = [];
+    private dependencySummaries: Array<RenderDependency[] | undefined> = [];
 
     private md: MarkdownIt | null = null;
     private protector = new ProtectionManager();
     private currentMacros: Record<string, string> = {};
     private mathRenderer: MathRendererType = 'katex';
-    private currentLabelMap: Record<string, string> = {};
+    private readonly registry: RuleRegistry;
 
     private blockMap: { start: number; count: number }[] = [];
     private scanner = new LatexCounterScanner();
     private _citedKeys: string[] = [];
     private documentView: RenderDocumentView | undefined;
     private readonly renderContext: RenderContext;
+    private readonly dependencyHelpers: DependencyHelpers = {
+        metadata: path => ({
+            id: `metadata:${path}`,
+            read: state => this.readMetadataDependency(state.metadata, path)
+        }),
+        citedKeys: () => ({
+            id: 'citations:list',
+            read: state => state.citedKeysFingerprint
+        })
+    };
 
-    constructor() {
+    constructor(registry: RuleRegistry = SNAP_TEX_RULES) {
+        this.registry = registry;
         const renderer = this;
         this.renderContext = {
             get currentMacros() { return renderer.currentMacros; },
-            get document() { return renderer.documentView; },
-            get citedKeys() { return renderer._citedKeys; },
+            get metadata() { return renderer.documentView?.metadata; },
             get bibEntries() { return renderer.documentView ? renderer.documentView.bibEntries : new Map(); },
             get mathRenderer() { return renderer.mathRenderer; },
-            get labelMap() { return renderer.currentLabelMap; },
-            protectHtml: (namespace, html) => this.protector.protect(namespace, html),
+            protectHtml: (namespace, html, mode) => this.protector.protect(namespace, html, mode),
             renderInline: text => this.renderInline(text),
-            resolveCitation: key => this.resolveCitation(key)
+            resolveCitation: key => this.resolveCitation(key),
+            getCitedKeys: () => renderer._citedKeys
         };
         this.rebuildMarkdownEngine({});
+    }
+
+    private readMetadataDependency(metadata: RenderDocumentView['metadata'], path: string): string {
+        const value = path.split('.').reduce<unknown>((current, part) => {
+            if (current === undefined || current === null || typeof current !== 'object') { return undefined; }
+            return (current as Record<string, unknown>)[part];
+        }, metadata);
+        if (value === undefined || value === null) { return ''; }
+        return typeof value === 'string' ? value : JSON.stringify(value);
     }
 
     /**
@@ -76,12 +138,12 @@ export class SmartRenderer {
     public resetState() {
         this.lastBlocks = [];
         this.lastTextSnapshot = EMPTY_TEXT_SNAPSHOT;
-        this.lastMetaFingerprint = "";
         this.lastMacrosJson = "";
-        this.lastCitedKeys = [];
+        this.dependencySummaries = [];
         this.blockMap = [];
         this._citedKeys = [];
         this.documentView = undefined;
+        this.scanner.reset();
     }
 
     /**
@@ -112,7 +174,7 @@ export class SmartRenderer {
     private renderBlockToHtml(text: string, index: number): string {
         let processed = text;
 
-        PREPROCESS_RULES.forEach(rule => { processed = rule.apply(processed, this.renderContext); });
+        this.registry.renderRules.forEach(rule => { processed = rule.apply(processed, this.renderContext); });
 
         let finalHtml = this.md!.render(processed);
 
@@ -127,39 +189,70 @@ export class SmartRenderer {
         return `<div class="latex-block" data-index="${index}" data-block-hash="${stableHash(text)}">${finalHtml}</div>`;
     }
 
-    private applyMetadataFingerprint(text: string, metaFingerprint: string): string {
-        return text.includes('\\maketitle') ? text.replace('\\maketitle', `\\maketitle${metaFingerprint}`) : text;
+    private createAstRenderContext(sourceText: string) {
+        return createDefaultAstRenderContext({
+            sourceText,
+            currentMacros: this.currentMacros,
+            metadata: this.documentView?.metadata,
+            bibEntries: this.documentView ? this.documentView.bibEntries : new Map(),
+            renderMath: (tex, displayMode) => this.mathRenderer === 'mathjax'
+                ? renderMathJax(tex, displayMode, this.currentMacros)
+                : renderKatexHtml(tex, displayMode, this.currentMacros),
+            renderCitation: (command, keys, options) => renderCitationHtml(command, keys, {
+                pre: options.pre ? `${options.pre} ` : undefined,
+                post: options.post
+            }, this.renderContext),
+            renderImage: path => renderIncludeGraphicsHtml(path)
+        });
     }
 
-    private getSnapshotBlockText(snapshot: BlockTextSnapshot, index: number, metaFingerprint: string): string | undefined {
+    private async renderBlockToHtmlAsync(text: string, index: number): Promise<string> {
+        const artifact = this.documentView?.getAstBlockArtifact(index);
+        const map = this.blockMap[index];
+        const result = await renderLatexBlockWithAst(text, {
+            rules: this.registry.astRenderRules,
+            context: this.createAstRenderContext(text),
+            wrapper: {
+                index,
+                hash: artifact?.hash ?? stableHash(text),
+                line: map?.start,
+                lineCount: map?.count
+            }
+        });
+        this.documentView?.setAstBlockArtifact(index, result.artifact);
+        return result.html;
+    }
+
+    private getSnapshotBlockText(snapshot: BlockTextSnapshot, index: number): string | undefined {
         const span = snapshot.blockSpans[index];
         if (!span) { return undefined; }
-        return this.applyMetadataFingerprint(snapshot.bodyText.slice(span.start, span.end), metaFingerprint);
+        return getBlockSpanText(snapshot.bodyText, span);
     }
 
-    private createRenderBlockAccess(doc: RenderDocumentView, blockCount: number, metaFingerprint: string) {
+    private createRenderBlockAccess(doc: RenderDocumentView, blockCount: number): RenderBlockAccess {
         const textCache = new Map<number, string>();
-        const hashCache = new Map<number, string>();
+        let textCacheEnabled = true;
         const getText = (index: number): string => {
+            if (!textCacheEnabled) {
+                return doc.getBlockText(index) ?? '';
+            }
             if (!textCache.has(index)) {
                 const rawText = doc.getBlockText(index) ?? '';
-                textCache.set(index, this.applyMetadataFingerprint(rawText, metaFingerprint));
+                textCache.set(index, rawText);
             }
             return textCache.get(index) ?? '';
         };
         const getHash = (index: number): string => {
             const rawHash = doc.getBlockHash(index);
-            if (!doc.isMetadataSensitiveBlock(index)) {
-                return rawHash ?? stableHash(getText(index));
-            }
-            if (!hashCache.has(index)) {
-                hashCache.set(index, stableHash(getText(index)));
-            }
-            return hashCache.get(index) ?? '';
+            return rawHash ?? stableHash(getText(index));
         };
 
         return {
             getText,
+            setTextCacheEnabled: (enabled: boolean) => {
+                textCacheEnabled = enabled;
+                if (!enabled) { textCache.clear(); }
+            },
             hashBlocks: Array.from({ length: blockCount }, (_unused, index) => ({ hash: getHash(index) })),
             provider: {
                 getBlockCount: () => blockCount,
@@ -169,16 +262,23 @@ export class SmartRenderer {
         };
     }
 
-    private buildBlockMeta(text: string, index: number): BlockSnapshot {
+    private buildBlockMeta(text: string, index: number, hash = stableHash(text), artifact?: AstBlockArtifact): BlockSnapshot {
         const map = this.blockMap[index];
+        const metadata = artifact?.parseOk ? artifact.metadata : undefined;
+        const bibliographyCommand = metadata?.macros.includes('bibliography')
+            ? true
+            : R_BIBLIOGRAPHY.test(text) || R_ADDBIBRESOURCE.test(text) || /\\printbibliography\b/.test(text);
+        const hasBibliography = bibliographyCommand || (metadata
+            ? metadata.environments.includes('thebibliography')
+            : R_THEBIBLIOGRAPHY.test(text));
         return {
             index,
-            hash: stableHash(text),
+            hash,
             line: map?.start ?? 0,
             lineCount: map?.count ?? text.split(/\r?\n/).length,
-            anchors: Array.from(new Set(extractLatexLabelNames(text))),
-            hasBibliography: R_BIBLIOGRAPHY.test(text) || R_ADDBIBRESOURCE.test(text),
-            citationKeys: extractLatexCitationKeys(text)
+            anchors: metadata ? [...metadata.labels] : Array.from(new Set(extractLatexLabelNames(text))),
+            hasBibliography,
+            citationKeys: metadata ? [...metadata.citations] : extractLatexCitationKeys(text)
         };
     }
 
@@ -192,8 +292,19 @@ export class SmartRenderer {
         };
     }
 
-    private buildNextBlockSnapshots(blockCount: number, diff: DiffResult, getBlockText: (index: number) => string): BlockSnapshot[] {
-        const createBlockMeta = (index: number) => this.buildBlockMeta(getBlockText(index), index);
+    private buildNextBlockSnapshots(
+        blockCount: number,
+        diff: DiffResult,
+        getBlockText: (index: number) => string,
+        hashes: readonly { hash: string }[],
+        getBlockArtifact: (index: number) => AstBlockArtifact | undefined
+    ): BlockSnapshot[] {
+        const createBlockMeta = (index: number) => this.buildBlockMeta(
+            getBlockText(index),
+            index,
+            hashes[index]?.hash,
+            getBlockArtifact(index)
+        );
         return DiffEngine.rebuildArray(
             this.lastBlocks,
             blockCount,
@@ -204,13 +315,11 @@ export class SmartRenderer {
     }
 
     private collectCitedKeys(blocks: BlockSnapshot[]): string[] {
-        const keys = new Set<string>();
-        for (const block of blocks) {
-            for (const key of block.citationKeys) {
-                keys.add(key);
-            }
-        }
-        return Array.from(keys);
+        return Array.from(new Set(blocks.flatMap(block => block.citationKeys)));
+    }
+
+    private fingerprintCitedKeySet(citedKeys: readonly string[]): string {
+        return stableHash(Array.from(new Set(citedKeys)).sort().join('\0'));
     }
 
     private applyBibliographyAnchors(blocks: BlockSnapshot[], citedKeys: string[]): BlockSnapshot[] {
@@ -223,11 +332,6 @@ export class SmartRenderer {
                 anchors: Array.from(anchors)
             };
         });
-    }
-
-    private haveSameCitedKeys(nextKeys: string[]): boolean {
-        return nextKeys.length === this.lastCitedKeys.length
-            && nextKeys.every((key, index) => key === this.lastCitedKeys[index]);
     }
 
     private buildNumberingPayload(scanResult: {
@@ -247,22 +351,104 @@ export class SmartRenderer {
         const block = this.lastBlocks[index];
         if (!block) { return undefined; }
 
-        const text = this.getSnapshotBlockText(this.lastTextSnapshot, index, this.lastMetaFingerprint);
+        const text = this.getSnapshotBlockText(this.lastTextSnapshot, index);
         return {
             hash: block.hash,
             html: text === undefined ? undefined : this.renderBlockToHtml(text, index)
         };
     }
 
-    /**
-     * Renders a parsed document and returns the minimal webview update payload.
-     *
-     * The full-update threshold intentionally remains a fixed 50 changed blocks.
-     * Virtual mode may request metadata-only full payloads; individual block HTML
-     * is then rendered lazily by index from lastTextSnapshot.
-     */
-    public render(doc: RenderDocumentView, options: RenderOptions = {}): PatchPayload {
+    public async renderBlockByIndexAsync(index: number): Promise<{ hash: string; html?: string } | undefined> {
+        const block = this.lastBlocks[index];
+        if (!block) { return undefined; }
+
+        const text = this.getSnapshotBlockText(this.lastTextSnapshot, index);
+        return {
+            hash: block.hash,
+            html: text === undefined ? undefined : await this.renderBlockToHtmlAsync(text, index)
+        };
+    }
+
+    private collectBlockDependencies(text: string, index: number, artifact?: AstBlockArtifact): RenderDependency[] {
+        return this.registry.blockDependencyRules.flatMap(rule => rule.collect({ text, index, artifact, deps: this.dependencyHelpers }));
+    }
+
+    private updateDependencySummaries(
+        blockCount: number,
+        diff: DiffResult,
+        getBlockText: (index: number) => string,
+        getBlockArtifact: (index: number) => AstBlockArtifact | undefined
+    ): Array<RenderDependency[] | undefined> {
+        this.dependencySummaries = DiffEngine.rebuildArray(
+            this.dependencySummaries,
+            blockCount,
+            diff,
+            index => {
+                const dependencies = this.collectBlockDependencies(getBlockText(index), index, getBlockArtifact(index));
+                return dependencies.length > 0 ? dependencies : undefined;
+            },
+            summary => summary
+        );
+        return this.dependencySummaries;
+    }
+
+    private fingerprintDependencies(dependencies: readonly RenderDependency[], state: DependencyState): string {
+        const parts = dependencies
+            .map(dependency => `${dependency.id}\u0000${dependency.read(state)}`)
+            .sort();
+        return stableHash(parts.join('\u0001'));
+    }
+
+    private applyDependencyFingerprints(
+        blocks: BlockSnapshot[],
+        summaries: readonly (readonly RenderDependency[] | undefined)[],
+        state: DependencyState
+    ): BlockSnapshot[] {
+        return blocks.map((block, index) => {
+            const dependencies = summaries[index] ?? [];
+            if (dependencies.length === 0) {
+                return { ...block, dependencyFingerprint: undefined };
+            }
+            return {
+                ...block,
+                dependencyFingerprint: this.fingerprintDependencies(dependencies, state)
+            };
+        });
+    }
+
+    private collectDependencyDirtyBlockIndices(previousAlignedBlocks: BlockSnapshot[], nextBlocks: BlockSnapshot[], diff: DiffResult): number[] {
+        const dirty: number[] = [];
+        const patchStart = diff.start;
+        const patchEnd = diff.start + diff.insertCount;
+
+        for (let index = 0; index < nextBlocks.length; index++) {
+            if (index >= patchStart && index < patchEnd) { continue; }
+
+            const next = nextBlocks[index];
+            const previous = previousAlignedBlocks[index];
+            if (!next.dependencyFingerprint || !previous) { continue; }
+            if (next.hash !== previous.hash) { continue; }
+            if (next.dependencyFingerprint !== previous.dependencyFingerprint) {
+                dirty.push(index);
+            }
+        }
+
+        return dirty;
+    }
+
+    private prepareRenderBase(doc: RenderDocumentView, options: RenderOptions): RenderPreparationBase {
         this.documentView = doc;
+
+        const nextMathRenderer = options.mathRenderer ?? 'katex';
+        if (nextMathRenderer !== this.mathRenderer) {
+            this.mathRenderer = nextMathRenderer;
+            this.lastBlocks = [];
+            this.lastTextSnapshot = EMPTY_TEXT_SNAPSHOT;
+            this.dependencySummaries = [];
+            if (nextMathRenderer === 'mathjax') {
+                resetMathJax();
+            }
+        }
 
         this.protector.reset();
 
@@ -272,95 +458,165 @@ export class SmartRenderer {
             this.rebuildMarkdownEngine(doc.metadata.macros);
             this.lastBlocks = [];
             this.lastTextSnapshot = EMPTY_TEXT_SNAPSHOT;
-            this.lastMetaFingerprint = "";
+            this.dependencySummaries = [];
             this.lastMacrosJson = currentMacrosJson;
         }
 
-        const safeTitle = (doc.metadata.title || '').replace(/[\r\n]/g, ' ');
-        const safeAuthor = (doc.metadata.author || '').replace(/[\r\n]/g, ' ');
-        const safeDate = (doc.metadata.date || '').replace(/[\r\n]/g, ' ');
-        const metaFingerprint = ` [meta:${stableHash(`${safeTitle}\u0000${safeAuthor}\u0000${safeDate}`)}]`;
-
         const blockCount = doc.getBlockCount();
-        const blockAccess = this.createRenderBlockAccess(doc, blockCount, metaFingerprint);
+        const blockAccess = this.createRenderBlockAccess(doc, blockCount);
 
         this.blockMap = doc.blockSpans.map(span => ({
             start: doc.contentStartLineOffset + span.line,
             count: span.lineCount
         }));
 
-        const scanResult = this.scanner.scan(blockAccess.provider);
-
-        const numberingData = this.buildNumberingPayload(scanResult);
-        this.currentLabelMap = scanResult.labelMap;
-
         const diff = DiffEngine.compute(this.lastBlocks, blockAccess.hashBlocks);
 
         const isFullUpdate = this.lastBlocks.length === 0 || diff.insertCount > 50 || diff.deleteCount > 50;
-        let payload: PatchPayload;
-        let blockMeta = this.buildNextBlockSnapshots(blockCount, diff, blockAccess.getText);
+        blockAccess.setTextCacheEnabled(!(isFullUpdate && options.deferFullHtml));
+
+        return {
+            blockCount,
+            blockAccess,
+            diff,
+            isFullUpdate,
+            macrosChanged
+        };
+    }
+
+    private finishRenderPreparation(doc: RenderDocumentView, base: RenderPreparationBase, scanResult: ScanResult): RenderPreparation {
+        const numberingData = this.buildNumberingPayload(scanResult);
+
+        const getBlockArtifact = (index: number) => doc.getAstBlockArtifact(index);
+        let blockMeta = this.buildNextBlockSnapshots(
+            base.blockCount,
+            base.diff,
+            base.blockAccess.getText,
+            base.blockAccess.hashBlocks,
+            getBlockArtifact
+        );
         const nextCitedKeys = this.collectCitedKeys(blockMeta);
-        const keysChanged = !this.haveSameCitedKeys(nextCitedKeys);
         this._citedKeys = nextCitedKeys;
-        this.lastCitedKeys = [...nextCitedKeys];
         blockMeta = this.applyBibliographyAnchors(blockMeta, nextCitedKeys);
+        const previousAlignedBlocks = blockMeta;
+        const dependencySummaries = this.updateDependencySummaries(
+            base.blockCount,
+            base.diff,
+            base.blockAccess.getText,
+            getBlockArtifact
+        );
+        blockMeta = this.applyDependencyFingerprints(blockMeta, dependencySummaries, {
+            metadata: doc.metadata,
+            citedKeysFingerprint: this.fingerprintCitedKeySet(nextCitedKeys)
+        });
+        const dirtyBlockIndices = this.collectDependencyDirtyBlockIndices(previousAlignedBlocks, blockMeta, base.diff);
         const nextTextSnapshot = doc.createTextSnapshot();
 
-        if (isFullUpdate) {
-            this.lastBlocks = blockMeta;
-            this.lastTextSnapshot = nextTextSnapshot;
-            this.lastMetaFingerprint = metaFingerprint;
+        return {
+            ...base,
+            numberingData,
+            blockMeta,
+            dirtyBlockIndices,
+            nextTextSnapshot
+        };
+    }
 
-            payload = {
+    private prepareRenderState(doc: RenderDocumentView, options: RenderOptions): RenderPreparation {
+        const base = this.prepareRenderBase(doc, options);
+        return this.finishRenderPreparation(doc, base, this.scanner.scan(base.blockAccess.provider));
+    }
+
+    private commitRenderState(prepared: RenderPreparation) {
+        this.lastBlocks = prepared.blockMeta;
+        this.lastTextSnapshot = prepared.nextTextSnapshot;
+    }
+
+    private buildFullPayload(prepared: RenderPreparation, options: RenderOptions, htmls: string[] | undefined): RenderPayload {
+        return options.deferFullHtml
+            ? {
                 type: 'full',
-                htmls: options.deferFullHtml
-                    ? undefined
-                    : Array.from({ length: blockCount }, (_unused, index) => this.renderBlockToHtml(blockAccess.getText(index), index)),
-                blocks: options.deferFullHtml ? blockMeta : undefined,
-                start: undefined,
-                deleteCount: undefined,
-                shift: undefined,
-                preserveUnchangedBlocks: !macrosChanged,
-                numbering: numberingData,
-                dirtyBlocks: undefined
+                blocks: prepared.blockMeta,
+                resetPreviewState: options.resetPreviewState,
+                numbering: prepared.numberingData
+            }
+            : {
+                type: 'full',
+                htmls: htmls ?? [],
+                preserveUnchangedBlocks: !prepared.macrosChanged && !options.resetPreviewState,
+                resetPreviewState: options.resetPreviewState,
+                numbering: prepared.numberingData
             };
+    }
+
+    private buildPatchPayload(prepared: RenderPreparation, insertedHtmls: string[], dirtyBlocks?: { [index: number]: string }): RenderPayload {
+        let shift = 0;
+        if (prepared.diff.end > 0 && insertedHtmls.length !== prepared.diff.deleteCount) {
+            shift = insertedHtmls.length - prepared.diff.deleteCount;
+        }
+
+        return {
+            type: 'patch',
+            start: prepared.diff.start,
+            deleteCount: prepared.diff.deleteCount,
+            htmls: insertedHtmls,
+            shift,
+            numbering: prepared.numberingData,
+            dirtyBlocks
+        };
+    }
+
+    private async renderAllBlocksAsync(prepared: RenderPreparation): Promise<string[]> {
+        const htmls: string[] = [];
+        for (let index = 0; index < prepared.blockCount; index++) {
+            htmls.push(await this.renderBlockToHtmlAsync(prepared.blockAccess.getText(index), index));
+        }
+        return htmls;
+    }
+
+    private getInsertedBlockIndices(prepared: RenderPreparation): number[] {
+        return Array.from(
+            { length: prepared.diff.insertCount },
+            (_unused, offset) => prepared.diff.start + offset
+        );
+    }
+
+    private getDirtyBlockRenderJobs(indices: readonly number[]): Array<[index: number, text: string]> {
+        return indices.flatMap(index => {
+            const text = this.getSnapshotBlockText(this.lastTextSnapshot, index);
+            return text === undefined ? [] : [[index, text]];
+        });
+    }
+
+    /**
+     * Renders a parsed document and returns the minimal webview update payload.
+     *
+     * The full-update threshold intentionally remains a fixed 50 changed blocks.
+     * Virtual mode may request metadata-only full payloads; individual block HTML
+     * is then rendered lazily by index from lastTextSnapshot.
+     */
+    public render(doc: RenderDocumentView, options: RenderOptions = {}): RenderPayload {
+        const prepared = this.prepareRenderState(doc, options);
+        let payload: RenderPayload;
+
+        if (prepared.isFullUpdate) {
+            this.commitRenderState(prepared);
+            const htmls = options.deferFullHtml
+                ? undefined
+                : Array.from({ length: prepared.blockCount }, (_unused, index) => this.renderBlockToHtml(prepared.blockAccess.getText(index), index));
+            payload = this.buildFullPayload(prepared, options, htmls);
         } else {
-            const insertedHtmls: string[] = [];
-            for (let i = 0; i < diff.insertCount; i++) {
-                const absoluteIndex = diff.start + i;
-                insertedHtmls.push(this.renderBlockToHtml(blockAccess.getText(absoluteIndex), absoluteIndex));
+            const insertedHtmls = this.getInsertedBlockIndices(prepared)
+                .map(index => this.renderBlockToHtml(prepared.blockAccess.getText(index), index));
+
+            this.commitRenderState(prepared);
+
+            let dirtyBlocks: { [index: number]: string } | undefined;
+            for (const [index, text] of this.getDirtyBlockRenderJobs(prepared.dirtyBlockIndices)) {
+                dirtyBlocks ??= {};
+                dirtyBlocks[index] = this.renderBlockToHtml(text, index);
             }
 
-            let shift = 0;
-            if (diff.end > 0 && insertedHtmls.length !== diff.deleteCount) {
-                shift = insertedHtmls.length - diff.deleteCount;
-            }
-
-            this.lastBlocks = blockMeta;
-            this.lastTextSnapshot = nextTextSnapshot;
-            this.lastMetaFingerprint = metaFingerprint;
-
-            const dirtyBlocksMap: { [index: number]: string } = {};
-            if (keysChanged) {
-                const bibBlockIndex = this.lastBlocks.findIndex(block => block.hasBibliography);
-                const isInsideMainPatch = bibBlockIndex >= diff.start && bibBlockIndex < (diff.start + diff.insertCount);
-                if (bibBlockIndex !== -1 && !isInsideMainPatch) {
-                    const text = this.getSnapshotBlockText(this.lastTextSnapshot, bibBlockIndex, this.lastMetaFingerprint);
-                    if (text !== undefined) {
-                        dirtyBlocksMap[bibBlockIndex] = this.renderBlockToHtml(text, bibBlockIndex);
-                    }
-                }
-            }
-
-            payload = {
-                type: 'patch',
-                start: diff.start,
-                deleteCount: diff.deleteCount,
-                htmls: insertedHtmls,
-                shift: shift,
-                numbering: numberingData,
-                dirtyBlocks: dirtyBlocksMap
-            };
+            payload = this.buildPatchPayload(prepared, insertedHtmls, dirtyBlocks);
         }
 
         this.protector.reset();
@@ -368,53 +624,200 @@ export class SmartRenderer {
         return payload;
     }
 
-    public getPreviewSyncData(filePath: string, line: number) {
+    public async renderAsync(doc: RenderDocumentView, options: RenderOptions = {}): Promise<RenderPayload> {
+        const prepared = this.prepareRenderState(doc, options);
+        let payload: RenderPayload;
+
+        if (prepared.isFullUpdate) {
+            this.commitRenderState(prepared);
+            const htmls = options.deferFullHtml
+                ? undefined
+                : await this.renderAllBlocksAsync(prepared);
+            payload = this.buildFullPayload(prepared, options, htmls);
+        } else {
+            const insertedHtmls: string[] = [];
+            for (const index of this.getInsertedBlockIndices(prepared)) {
+                insertedHtmls.push(await this.renderBlockToHtmlAsync(prepared.blockAccess.getText(index), index));
+            }
+
+            this.commitRenderState(prepared);
+
+            let dirtyBlocks: { [index: number]: string } | undefined;
+            for (const [index, text] of this.getDirtyBlockRenderJobs(prepared.dirtyBlockIndices)) {
+                dirtyBlocks ??= {};
+                dirtyBlocks[index] = await this.renderBlockToHtmlAsync(text, index);
+            }
+
+            payload = this.buildPatchPayload(prepared, insertedHtmls, dirtyBlocks);
+        }
+
+        this.protector.reset();
+        return payload;
+    }
+
+    public getPreviewSyncData(filePath: string, line: number, character?: number) {
         if (!this.documentView) {return null;}
         const flatLine = this.documentView.getFlattenedLine(filePath, line);
-        return flatLine !== -1 ? this.getBlockIndexByLine(flatLine) : null;
+        return flatLine !== -1 ? this.getBlockIndexByLine(flatLine, character) : null;
     }
 
-    public getSourceSyncData(blockIndex: number, ratio: number): SourceLocation | null {
+    public getSourceSyncData(blockIndex: number, ratio: number, anchors: readonly string[] = [], sourceStart?: number, sourceEnd?: number): SourceLocation | null {
         if (!this.documentView) {return null;}
-        const flatLine = this.getLineByBlockIndex(blockIndex, ratio);
-        return this.documentView.getOriginalPosition(flatLine) || null;
+        const flatLine = this.getLineByBlockIndex(blockIndex, ratio, anchors, sourceStart, sourceEnd);
+        const sourceLoc = this.documentView.getOriginalPosition(flatLine);
+        if (!sourceLoc) { return null; }
+
+        const block = this.blockMap[blockIndex];
+        if (!block) { return sourceLoc; }
+
+        const startLoc = this.documentView.getOriginalPosition(block.start);
+        const endLoc = this.documentView.getOriginalPosition(block.start + Math.max(0, block.count - 1));
+        if (startLoc && endLoc && startLoc.file === sourceLoc.file && endLoc.file === sourceLoc.file) {
+            return {
+                ...sourceLoc,
+                blockRange: {
+                    startLine: Math.min(startLoc.line, endLoc.line),
+                    endLine: Math.max(startLoc.line, endLoc.line)
+                }
+            };
+        }
+        return sourceLoc;
     }
 
-    private getBlockIndexByLine(line: number): { index: number; ratio: number } {
+    private getBlockIndexByLine(line: number, character?: number): { index: number; ratio: number; sourceStart?: number; sourceEnd?: number } {
         if (this.blockMap.length === 0) { return { index: 0, ratio: 0 }; }
         if (line < this.blockMap[0].start) { return { index: 0, ratio: 0 }; }
         for (let i = 0; i < this.blockMap.length; i++) {
             const b = this.blockMap[i];
             const nextStart = (i + 1 < this.blockMap.length) ? this.blockMap[i+1].start : Infinity;
             if (line >= b.start && line < nextStart) {
-                const ratio = Math.max(0, Math.min(1, (line - b.start) / Math.max(1, b.count)));
-                return { index: i, ratio };
+                const anchor = this.getAstPreviewAnchor(i, line - b.start, character);
+                return anchor
+                    ? { index: i, ...anchor }
+                    : { index: i, ratio: Math.max(0, Math.min(1, (line - b.start) / Math.max(1, b.count))) };
             }
         }
         return { index: this.blockMap.length - 1, ratio: 0 };
     }
 
-    private getLineByBlockIndex(index: number, ratio: number): number {
+    private getLineByBlockIndex(index: number, ratio: number, anchors: readonly string[] = [], sourceStart?: number, sourceEnd?: number): number {
+        const astHintLine = this.getLineBySourceOffset(index, sourceStart, sourceEnd) ?? this.getLineByAstSourceHint(index, ratio);
+        const estimatedLine = astHintLine ?? this.getLineByBlockRatio(index, ratio);
+        return this.refineLineByAnchors(index, estimatedLine, anchors) ?? estimatedLine;
+    }
+
+    private getLineBySourceOffset(index: number, sourceStart: number | undefined, sourceEnd: number | undefined): number | undefined {
+        if (sourceStart === undefined) { return undefined; }
+
+        const block = this.blockMap[index];
+        const text = this.getSnapshotBlockText(this.lastTextSnapshot, index);
+        if (!block || !text) { return undefined; }
+
+        const targetOffset = sourceEnd === undefined
+            ? sourceStart
+            : Math.floor((sourceStart + sourceEnd) / 2);
+        return block.start + lineAtOffset(text, Math.max(0, Math.min(text.length, targetOffset)));
+    }
+
+    private getLineByBlockRatio(index: number, ratio: number): number {
         if (index >= 0 && index < this.blockMap.length) {
-            const b = this.blockMap[index];
-            return b.start + Math.floor(b.count * ratio);
+            const block = this.blockMap[index];
+            return block.start + Math.floor(block.count * ratio);
         }
         return 0;
     }
 
-    public setMathRenderer(type: MathRendererType) {
-        if (type !== this.mathRenderer) {
-            this.mathRenderer = type;
-            this.lastBlocks = [];
-            this.lastTextSnapshot = EMPTY_TEXT_SNAPSHOT;
-            this.lastMetaFingerprint = "";
-            if (type === 'mathjax') {
-                resetMathJax();
-            }
-        }
+    private refineLineByAnchors(index: number, estimatedFlatLine: number, anchors: readonly string[]): number | undefined {
+        if (anchors.length === 0) { return undefined; }
+
+        const block = this.blockMap[index];
+        const text = this.getSnapshotBlockText(this.lastTextSnapshot, index);
+        if (!block || !text) { return undefined; }
+
+        const lines = text.split(/\r?\n/);
+        const estimatedLineInBlock = Math.max(0, Math.min(block.count - 1, estimatedFlatLine - block.start));
+        const matchedLine = findNearestSyncAnchorLine(
+            anchors,
+            0,
+            Math.min(lines.length - 1, Math.max(0, block.count - 1)),
+            estimatedLineInBlock,
+            line => lines[line] ?? ''
+        );
+        return matchedLine === undefined ? undefined : block.start + matchedLine;
     }
 
-    public getMathJaxCSS(): string {
-        return this.mathRenderer === 'mathjax' ? getMathJaxCSSFromRenderer() : '';
+    private getAstSyncData(index: number): { block: { start: number; count: number }; artifact: AstBlockArtifact; text: string } | undefined {
+        const block = this.blockMap[index];
+        const artifact = this.documentView?.getAstBlockArtifact(index);
+        const text = this.getSnapshotBlockText(this.lastTextSnapshot, index);
+        if (!block || !artifact || !text || artifact.sourceHints.starts.length === 0) {
+            return undefined;
+        }
+        return { block, artifact, text };
+    }
+
+    private getAstPreviewAnchor(index: number, lineInBlock: number, character?: number): { ratio: number; sourceStart: number; sourceEnd: number } | undefined {
+        if (character === undefined) { return undefined; }
+
+        const syncData = this.getAstSyncData(index);
+        if (!syncData) { return undefined; }
+        const { block, artifact, text } = syncData;
+
+        const sourceOffset = offsetAtLine(text, lineInBlock) + Math.max(0, character);
+        for (let hintIndex = 0; hintIndex < artifact.sourceHints.starts.length; hintIndex++) {
+            const kind = artifact.sourceHints.kinds[hintIndex];
+            if (!SOURCE_SYNC_HINT_KINDS.has(kind)) { continue; }
+
+            const start = artifact.sourceHints.starts[hintIndex];
+            const end = artifact.sourceHints.ends[hintIndex];
+            if (sourceOffset >= start && sourceOffset <= end) {
+                const hintLine = lineAtOffset(text, Math.floor((start + end) / 2));
+                return {
+                    ratio: Math.max(0, Math.min(1, hintLine / Math.max(1, block.count))),
+                    sourceStart: start,
+                    sourceEnd: end
+                };
+            }
+        }
+        return undefined;
+    }
+
+    private getLineByAstSourceHint(index: number, ratio: number): number | undefined {
+        const syncData = this.getAstSyncData(index);
+        if (!syncData) { return undefined; }
+        const { block, artifact, text } = syncData;
+
+        const estimatedLineInBlock = Math.max(0, Math.min(block.count - 1, Math.floor(block.count * ratio)));
+        const estimatedOffset = offsetAtLine(text, estimatedLineInBlock);
+        const threshold = Math.max(80, Math.floor(text.length * 0.08));
+        let bestIndex = -1;
+        let bestDistance = Infinity;
+
+        for (let hintIndex = 0; hintIndex < artifact.sourceHints.starts.length; hintIndex++) {
+            const kind = artifact.sourceHints.kinds[hintIndex];
+            if (!SOURCE_SYNC_HINT_KINDS.has(kind)) { continue; }
+
+            const start = artifact.sourceHints.starts[hintIndex];
+            const end = artifact.sourceHints.ends[hintIndex];
+            const hintLine = lineAtOffset(text, start);
+            if (Math.abs(hintLine - estimatedLineInBlock) > 3) { continue; }
+
+            const distance = estimatedOffset >= start && estimatedOffset <= end
+                ? 0
+                : Math.min(Math.abs(estimatedOffset - start), Math.abs(estimatedOffset - end));
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                bestIndex = hintIndex;
+            }
+        }
+
+        if (bestIndex === -1 || bestDistance > threshold) {
+            return undefined;
+        }
+
+        const start = artifact.sourceHints.starts[bestIndex];
+        const end = artifact.sourceHints.ends[bestIndex];
+        const targetOffset = Math.max(start, Math.min(end, estimatedOffset));
+        return block.start + lineAtOffset(text, targetOffset);
     }
 }

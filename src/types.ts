@@ -1,3 +1,6 @@
+import type { AstBlockArtifact } from './ast/block-metadata';
+import type { AstRenderRule } from './ast/rules';
+
 export interface BibEntry {
     key: string;
     type: string;
@@ -7,28 +10,52 @@ export interface BibEntry {
 export interface SourceLocation {
     file: string;
     line: number;
+    blockRange?: { startLine: number; endLine: number };
+}
+
+export interface TextRange {
+    start: number;
+    end: number;
+}
+
+export interface AuthorMetadata {
+    name: string;
+    emails: string[];
+    affiliationIds: string[];
+}
+
+export interface AffiliationMetadata {
+    id: string;
+    text: string;
 }
 
 export interface PreambleData {
     macros: Record<string, string>;
     tikzGlobal: string;
     tikzMacroMap: Map<string, string>;
-
     title?: string;
     subtitle?: string;
-    author?: string;
-    institute?: string;
     date?: string;
-    affiliation?: string;
+    authors: AuthorMetadata[];
+    affiliations: AffiliationMetadata[];
+    institute?: string;
     shortTitle?: string;
     shortAuthor?: string;
     shortInstitute?: string;
     shortDate?: string;
+    keywords: string[];
+    custom: Record<string, string>;
 }
+
+export type PreambleMetadata = Omit<PreambleData, 'macros' | 'tikzGlobal' | 'tikzMacroMap'>;
 
 export interface MetadataResult {
     data: PreambleData;
     cleanedText: string;
+}
+
+export interface DocumentDiagnostic {
+    message: string;
 }
 
 export interface UriLike {
@@ -44,7 +71,12 @@ export interface BlockTextSpan {
     end: number;
     line: number;
     lineCount: number;
+    prefix?: string;
+    suffix?: string;
 }
+
+export type BackendMode = 'legacy' | 'ast(experimental)';
+export type MathRendererType = 'katex' | 'mathjax';
 
 /**
  * Snapshot retained by the renderer for lazy block rendering after the parsed
@@ -56,7 +88,7 @@ export interface BlockTextSnapshot {
 }
 
 /**
- * Stable document port consumed by SmartRenderer and preprocess rules.
+ * Stable document port consumed by SmartRenderer.
  *
  * LatexDocument implements this view today; future parsers or incremental
  * document stores should satisfy this interface instead of coupling renderer
@@ -73,7 +105,8 @@ export interface RenderDocumentView {
     getBlockCount(): number;
     getBlockText(index: number): string | undefined;
     getBlockHash(index: number): string | undefined;
-    isMetadataSensitiveBlock(index: number): boolean;
+    getAstBlockArtifact(index: number): AstBlockArtifact | undefined;
+    setAstBlockArtifact(index: number, artifact: AstBlockArtifact): void;
     createTextSnapshot(): BlockTextSnapshot;
     getFlattenedLine(targetUriString: string, originalLine: number): number;
     getOriginalPosition(flatLine: number): SourceLocation | undefined;
@@ -81,6 +114,7 @@ export interface RenderDocumentView {
 
 export interface RenderOptions {
     deferFullHtml?: boolean;
+    resetPreviewState?: boolean;
     mathRenderer?: MathRendererType;
 }
 
@@ -95,6 +129,7 @@ export interface RenderedBlockMeta {
 export interface BlockNumberingCounts {
     eq: string[];
     fig: string[];
+    subfig: string[];
     tbl: string[];
     alg: string[];
     sec: string[];
@@ -106,39 +141,122 @@ export interface NumberingPayload {
     labels: Record<string, string>;
 }
 
-export interface PatchPayload {
-    type: 'full' | 'patch';
-    start?: number;
-    deleteCount?: number;
-    htmls?: string[];
-    blocks?: RenderedBlockMeta[];
-    shift?: number;
-    preserveUnchangedBlocks?: boolean;
+type FullPayloadBody =
+    | {
+        htmls: string[];
+        blocks?: never;
+        preserveUnchangedBlocks: boolean;
+    }
+    | {
+        htmls?: never;
+        blocks: RenderedBlockMeta[];
+        preserveUnchangedBlocks?: never;
+    };
 
-    numbering?: NumberingPayload;
+export type RenderPayload =
+    | ({
+        type: 'full';
+        start?: never;
+        deleteCount?: never;
+        shift?: never;
+        dirtyBlocks?: never;
+        resetPreviewState?: boolean;
+        numbering: NumberingPayload;
+    } & FullPayloadBody)
+    | {
+        type: 'patch';
+        start: number;
+        deleteCount: number;
+        htmls: string[];
+        blocks?: never;
+        shift: number;
+        preserveUnchangedBlocks?: never;
+        numbering: NumberingPayload;
 
-    /**
-     * Blocks that must be refreshed even though their source hash did not change.
-     */
-    dirtyBlocks?: { [index: number]: string };
-}
-
-export type MathRendererType = 'katex' | 'mathjax';
+        /**
+         * Blocks that must be refreshed even though their source hash did not change.
+         */
+        dirtyBlocks?: { [index: number]: string };
+    };
 
 export interface RenderContext {
     currentMacros: Record<string, string>;
-    document?: RenderDocumentView;
-    citedKeys: string[];
+    metadata?: PreambleData;
     bibEntries: Map<string, BibEntry>;
     mathRenderer: MathRendererType;
-    labelMap: Record<string, string>;
-    protectHtml(namespace: string, html: string): string;
+    protectHtml(namespace: string, html: string, mode?: ProtectedHtmlMode): string;
     renderInline(text: string): string;
     resolveCitation(key: string): number;
+    getCitedKeys(): readonly string[];
 }
+
+export type ProtectedHtmlMode = 'block' | 'inline';
 
 export interface PreprocessRule {
     name: string;
     priority: number;
     apply: (text: string, renderer: RenderContext) => string;
+}
+
+export interface DependencyState {
+    metadata: PreambleData;
+    citedKeysFingerprint: string;
+}
+
+export interface RenderDependency {
+    id: string;
+    read(state: DependencyState): string;
+}
+
+export interface DependencyHelpers {
+    metadata(field: string): RenderDependency;
+    citedKeys(): RenderDependency;
+}
+
+export interface BlockDependencyInput {
+    text: string;
+    index: number;
+    artifact?: AstBlockArtifact;
+    deps: DependencyHelpers;
+}
+
+export interface BlockDependencyRule {
+    name: string;
+    collect(input: BlockDependencyInput): RenderDependency[];
+}
+
+export interface SplitterConfig {
+    maxBlockLines: number;
+    maxNoEmergencySplitLines: number;
+}
+
+export type SplitterRule =
+    | { name: string; kind: 'ignored-env'; envPattern: RegExp }
+    | { name: string; kind: 'transparent-env'; envPattern: RegExp; preserveWrapper?: boolean }
+    | { name: string; kind: 'split-env'; envPattern: RegExp }
+    | { name: string; kind: 'no-emergency-split-env'; envPattern: RegExp }
+    | { name: string; kind: 'no-emergency-split-begin-token'; beginTokenPattern: RegExp }
+    | { name: string; kind: 'emergency-split-end-env'; envPattern: RegExp };
+
+export interface SplitterOptions {
+    config: SplitterConfig;
+    rules: readonly SplitterRule[];
+}
+
+export type MetadataExtractionResult = Partial<PreambleMetadata> & {
+    ranges?: TextRange[];
+};
+
+export interface MetadataExtractor {
+    name: string;
+    extract(text: string): MetadataExtractionResult;
+}
+
+export interface RuleRegistry {
+    readonly metadataExtractors: readonly MetadataExtractor[];
+    readonly renderRules: readonly PreprocessRule[];
+    readonly astRenderRules: readonly AstRenderRule[];
+    readonly blockDependencyRules: readonly BlockDependencyRule[];
+    readonly splitterConfig: SplitterConfig;
+    readonly splitterRules: readonly SplitterRule[];
 }

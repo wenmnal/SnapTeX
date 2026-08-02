@@ -1,5 +1,7 @@
 # SnapTeX: High-Performance LaTeX Live Previewer
 
+> **New:** SnapTeX now has a pure static web version: **[Open SnapTeX Web](https://qianchd.github.io/SnapTeX/)**. Try the editor and live preview directly from GitHub Pages, with no VS Code extension install required.
+
 <div align="center">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="media/icon.png">
@@ -105,6 +107,12 @@ SnapTeX is designed to be "zero-config." It works out of the box with no externa
 * KaTeX: for rendering math
 * Pdfjs: for import pdf-type figures.
 * Tikzjax: [Jim Fowler's original](https://github.com/kisonecat/tikzjax); [Glenn Rice's fork](https://github.com/drgrice1/tikzjax);
+
+## For Developers and AI-assistants
+
+* If you plan to add new features or rendering rules, please try your best to add them in the [@rules.ts](src/rules.ts) file. SnapTeX defines sufficient APIs for the extension possibilities.
+
+* We plan to support user-defined rules in the future version.
 
 ---
 

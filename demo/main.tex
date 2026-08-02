@@ -11,6 +11,7 @@
 % Useful packages
 \usepackage{amsmath}
 \usepackage{graphicx}
+\usepackage{subcaption}
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta,positioning}
 \usepackage{algorithm}
@@ -40,6 +41,8 @@ Once you're familiar with the editor, you can find various project setting in th
 
 This draft links several numbered objects in one place: the sample mean identity in Equation~\eqref{eq:sample-mean}, the uploaded image in Figure~\ref{fig:frog}, the widget summary in Table~\ref{tab:demo-complex-table}, the streaming update sketch in Algorithm~\ref{alg:snap-update}, and the rendering pipeline in Figure~\ref{fig:tikz-pipeline}.
 
+\input{sections/project-editing}
+
 \subsection{How to create Sections and Subsections}
 
 Simply use the section and subsection commands, as in this example document! With Overleaf, all the formatting and numbering is handled automatically according to the template you've chosen. If you're using Rich Text mode, you can also create new section and subsections via the buttons in the editor toolbar.
@@ -55,6 +58,64 @@ Note that your figure will automatically be placed in the most appropriate place
 \includegraphics[width=0.2\textwidth]{frog.jpg}
 \caption{This frog was uploaded via the file-tree menu.}
 \label{fig:frog}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+
+    \begin{subfigure}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{frog.jpg}
+        \caption{First frog}
+        \label{fig:subfrog1}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{frog.jpg}
+        \caption{Second frog}
+        \label{fig:subfrog2}
+    \end{subfigure}
+
+    \caption{Two subfigures in one row.}
+    \label{fig:two-subfigures}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+
+    \begin{subfigure}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{frog.jpg}
+        \caption{First frog}
+        \label{fig:subfrog3}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{frog.jpg}
+        \caption{Second frog}
+        \label{fig:subfrog4}
+    \end{subfigure}
+
+    \vspace{0.3cm}
+
+    \begin{subfigure}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{frog.jpg}
+        \caption{Third frog}
+        \label{fig:subfrog5}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}{0.48\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{frog.jpg}
+        \caption{Fourth frog}
+        \label{fig:subfrog6}
+    \end{subfigure}
+
+    \caption{Four subfigures arranged in a $2 \times 2$ layout.}
+    \label{fig:four-subfigures}
 \end{figure}
 
 \subsection{How to add Tables}

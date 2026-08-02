@@ -1,7 +1,8 @@
 import { PreprocessRule, RenderContext } from './types';
 import { escapeHtmlAttribute, extractAndHideLabels, findCommand, resolveLatexStyles } from './utils';
-import { recoverPreservedTokens, renderCaptionContent, unwrapResizeboxAroundProtectedContent } from './rule-helpers';
+import { createStyleHtmlProtector, recoverPreservedTokens, renderCaptionContent, renderSubfigureWidthStyle, unwrapResizeboxAroundProtectedContent } from './rule-helpers';
 import { findFirstTabularEnvironment, renderLatexTabular, renderLatexTableInlineContent } from './latex-table';
+import { renderAlgorithmicList } from './latex-algorithm';
 
 interface FloatCaptionConfig {
     className: string;
@@ -14,55 +15,15 @@ function replaceFloatEnvironment(text: string, envName: 'figure' | 'algorithm' |
     return text.replace(pattern, (_match, _star, content) => render(content));
 }
 
-/**
- * Walks `text` looking for `\subfigure` / `\subfloat` calls and replaces each
- * with the result of `render(captionArg, body)`. Both the optional `[caption]`
- * and the mandatory `{body}` are matched with brace balancing so nested
- * braces (e.g. `\includegraphics[width=0.45\linewidth]{a.pdf}`) survive.
- * Returns the rewritten string.
- */
-function extractSubfigureCalls(
-    text: string,
-    render: (captionArg: string | undefined, body: string) => string
-): string {
-    const re = /\\(?:subfigure|subfloat)\b/g;
-    let out = '';
-    let cursor = 0;
-    let m: RegExpExecArray | null;
+export function renderIncludeGraphicsHtml(imgPath: string): string {
+    const cleanPath = imgPath.trim();
+    const safePath = escapeHtmlAttribute(cleanPath);
+    const canvasId = `pdf-${Math.random().toString(36).substr(2, 9)}`;
 
-    const readBalanced = (open: string, close: string, from: number): { content: string; end: number } | null => {
-        if (text[from] !== open) { return null; }
-        let depth = 0;
-        for (let i = from; i < text.length; i++) {
-            const ch = text[i];
-            if (ch === '\\') { i++; continue; }
-            if (ch === open) { depth++; continue; }
-            if (ch === close) {
-                depth--;
-                if (depth === 0) {
-                    return { content: text.substring(from + 1, i), end: i + 1 };
-                }
-            }
-        }
-        return null;
-    };
-
-    while ((m = re.exec(text)) !== null) {
-        let p = m.index + m[0].length;
-        // optional [caption]
-        let captionArg: string | undefined;
-        // optional [width] preceding the caption is uncommon; subfigure spec is `\subfigure[caption]{body}`.
-        const optMatch = readBalanced('[', ']', p);
-        if (optMatch) { captionArg = optMatch.content; p = optMatch.end; }
-        // mandatory {body}
-        const bodyMatch = readBalanced('{', '}', p);
-        if (!bodyMatch) { continue; }
-        out += text.substring(cursor, m.index) + render(captionArg, bodyMatch.content);
-        cursor = bodyMatch.end;
-        re.lastIndex = bodyMatch.end;
+    if (cleanPath.toLowerCase().endsWith('.pdf')) {
+        return `<canvas id="${canvasId}" data-req-path="${safePath}" style="width:100%; max-width:100%; display:block; margin:0 auto;"></canvas>`;
     }
-    out += text.substring(cursor);
-    return out;
+    return `<img src="LOCAL_IMG:${safePath}" style="max-width:100%; display:block; margin:0 auto;">`;
 }
 
 function extractRenderedCaption(content: string, renderer: RenderContext, config: FloatCaptionConfig): { content: string; captionHtml: string } {
@@ -78,6 +39,75 @@ function extractRenderedCaption(content: string, renderer: RenderContext, config
     };
 }
 
+function extractRenderedPlainCaption(content: string, renderer: RenderContext, className: string, prefixHtml = ''): { content: string; captionHtml: string } {
+    const captionRes = findCommand(content, 'caption');
+    if (!captionRes) {
+        return { content, captionHtml: '' };
+    }
+
+    return {
+        content: content.substring(0, captionRes.start) + content.substring(captionRes.end),
+        captionHtml: `<div class="${className}">${prefixHtml}${renderCaptionContent(captionRes.content, renderer)}</div>`
+    };
+}
+
+function cleanFigureLayoutCommands(content: string): string {
+    return content
+        .replace(/\\centering\b/g, '')
+        .replace(/\\hfill\b/g, '')
+        .replace(/\\vspace\*?(?:\[[^\]]*\])?\s*\{[^{}]*\}/g, '');
+}
+
+function extractLegacySubfigureCalls(
+    text: string,
+    render: (caption: string | undefined, body: string) => string
+): string {
+    const commandRegex = /\\(?:subfigure|subfloat)\b/g;
+    const readBalanced = (open: string, close: string, start: number): { content: string; end: number } | undefined => {
+        if (text[start] !== open) { return undefined; }
+        let depth = 0;
+        for (let index = start; index < text.length; index++) {
+            if (text[index] === '\\') { index++; continue; }
+            if (text[index] === open) { depth++; }
+            if (text[index] === close && --depth === 0) {
+                return { content: text.slice(start + 1, index), end: index + 1 };
+            }
+        }
+        return undefined;
+    };
+
+    let result = '';
+    let cursor = 0;
+    let match: RegExpExecArray | null;
+    while ((match = commandRegex.exec(text)) !== null) {
+        let position = commandRegex.lastIndex;
+        const optional = readBalanced('[', ']', position);
+        if (optional) { position = optional.end; }
+        const body = readBalanced('{', '}', position);
+        if (!body) { continue; }
+        result += text.slice(cursor, match.index) + render(optional?.content, body.content);
+        cursor = body.end;
+        commandRegex.lastIndex = body.end;
+    }
+    return result + text.slice(cursor);
+}
+
+function renderSubfigureEnvironment(widthSpec: string, content: string, renderer: RenderContext): string {
+    const { content: withoutCaption, captionHtml } = extractRenderedPlainCaption(content, renderer, 'subfigure-caption', '(<span class="sn-cnt" data-type="subfig"></span>) ');
+    const { cleanContent, hiddenHtml } = extractAndHideLabels(withoutCaption);
+    let body = cleanFigureLayoutCommands(cleanContent).trim();
+    body = unwrapResizeboxAroundProtectedContent(body);
+    body = body.replace(/\\includegraphics(?:\[.*?\])?\s*\{([^}]+)\}/g, (_imgMatch: string, imgPath: string) => renderIncludeGraphicsHtml(imgPath));
+    return `<div class="latex-subfigure" style="${renderSubfigureWidthStyle(widthSpec)}">${body}${captionHtml}${hiddenHtml}</div>`;
+}
+
+function renderSubfigureEnvironments(content: string, renderer: RenderContext): string {
+    return content.replace(
+        /\\begin\{subfigure\*?\}(?:\[[^\]]*\])?\s*\{([^{}]*)\}([\s\S]*?)\\end\{subfigure\*?\}/gi,
+        (_match, widthSpec: string, subfigureContent: string) => renderSubfigureEnvironment(widthSpec, subfigureContent, renderer)
+    );
+}
+
 /**
  * Converts LaTeX figure environments to protected HTML, preserving captions,
  * labels, local images, PDF canvases, and nested protected TikZ content.
@@ -88,48 +118,28 @@ export function createFigureRule(): PreprocessRule {
         priority: 120,
         apply: (text: string, renderer: RenderContext) => {
             return replaceFloatEnvironment(text, 'figure', content => {
-                const extracted = extractRenderedCaption(content, renderer, { className: 'figure-caption', label: 'Figure', counterType: 'fig' });
-                let body = extracted.content;
-                const captionHtml = extracted.captionHtml;
+                let withSubfigures = renderSubfigureEnvironments(content, renderer);
+                withSubfigures = extractLegacySubfigureCalls(withSubfigures, (caption, subfigureBody) => {
+                    const captionHtml = caption
+                        ? `<div class="subfigure-caption">(<span class="sn-cnt" data-type="subfig"></span>) ${renderCaptionContent(caption, renderer)}</div>`
+                        : '';
+                    return `<div class="latex-subfigure" style="${renderSubfigureWidthStyle('0.48\\linewidth')}">${subfigureBody}${captionHtml}</div>`;
+                });
+                const hasSubfigures = withSubfigures.includes('class="latex-subfigure"');
+                const { content: extractedContent, captionHtml } = extractRenderedCaption(withSubfigures, renderer, { className: 'figure-caption', label: 'Figure', counterType: 'fig' });
+                let body = extractedContent;
 
                 const { cleanContent, hiddenHtml } = extractAndHideLabels(body);
                 body = cleanContent;
 
-                body = body.trim().replace(/\\centering/g, '');
+                body = cleanFigureLayoutCommands(body).trim();
                 body = unwrapResizeboxAroundProtectedContent(body);
 
-                // Old-style \subfigure[caption]{body} from the `subfigure`
-                // package. Each occurrence becomes a flex item; siblings end
-                // up side-by-side under the parent figure. Counter labels
-                // (a)/(b)/... are handed out in document order.
-                let subIndex = 0;
-                body = extractSubfigureCalls(body, (capArg, innerBody) => {
-                    const letter = String.fromCharCode(97 + (subIndex++ % 26));
-                    const captionInner = capArg !== undefined
-                        ? renderCaptionContent(capArg, renderer)
-                        : '';
-                    const subCaptionHtml = captionInner
-                        ? `<div class="latex-subfigure-caption">(${letter}) ${captionInner}</div>`
-                        : '';
-                    return `<div class="latex-subfigure">${innerBody}${subCaptionHtml}</div>`;
-                });
-
-                body = body.replace(/\\includegraphics(?:\[.*?\])?\s*\{([^}]+)\}/g, (_imgMatch: string, imgPath: string) => {
-                    const cleanPath = imgPath.trim();
-                    const safePath = escapeHtmlAttribute(cleanPath);
-                    const canvasId = `pdf-${Math.random().toString(36).substr(2, 9)}`;
-
-                    if (cleanPath.toLowerCase().endsWith('.pdf')) {
-                        return `<canvas id="${canvasId}" data-req-path="${safePath}" style="width:100%; max-width:100%; height:auto; display:block; margin:0 auto;"></canvas>`;
-                    }
-                    return `<img src="LOCAL_IMG:${safePath}" style="max-width:100%; display:block; margin:0 auto;">`;
-                });
-
-                // Convert \\ line breaks (e.g. between two minipages) to <br/>.
-                // Done inside figure rule because the entire figure HTML is
-                // frozen into a protected token, so latex_linebreak (priority 185)
-                // can't reach \\ inside the figure.
+                body = body.replace(/\\includegraphics(?:\[.*?\])?\s*\{([^}]+)\}/g, (_imgMatch: string, imgPath: string) => renderIncludeGraphicsHtml(imgPath));
                 body = body.replace(/\\\\(?:\s*\[[^\]]*\])?/g, '<br/>');
+                if (hasSubfigures) {
+                    body = `<div class="latex-subfigure-grid">${body}</div>`;
+                }
 
                 const finalHtml = `<div class="latex-figure" style="text-align: center; margin: 1em 0;">${body}${captionHtml}${hiddenHtml}</div>`;
                 return `\n\n${renderer.protectHtml('fig', finalHtml)}\n\n`;
@@ -148,9 +158,8 @@ export function createAlgorithmRule(): PreprocessRule {
         priority: 130,
         apply: (text: string, renderer: RenderContext) => {
             return replaceFloatEnvironment(text, 'algorithm', content => {
-                const extracted = extractRenderedCaption(content, renderer, { className: 'alg-caption', label: 'Algorithm', counterType: 'alg' });
-                content = extracted.content;
-                const captionHtml = extracted.captionHtml;
+                const { content: extractedContent, captionHtml } = extractRenderedCaption(content, renderer, { className: 'alg-caption', label: 'Algorithm', counterType: 'alg' });
+                content = extractedContent;
 
                 const algRegex = /\\begin\{algorithmic\}(?:\[(.*?)\])?([\s\S]*?)\\end\{algorithmic\}/g;
                 let bodyHtml = '';
@@ -161,38 +170,9 @@ export function createAlgorithmRule(): PreprocessRule {
                     processedRegions.push({start: matchAlg.index, end: matchAlg.index + matchAlg[0].length});
                     const params = matchAlg[1] || '';
                     const rawBody = matchAlg[2];
-                    const showNumbers = params.includes('1');
-                    const listTag = showNumbers ? 'ol' : 'ul';
-                    const lines = rawBody.split('\n');
-                    let listItems = '';
-
-                    lines.forEach(line => {
-                        let trimmed = line.trim();
-                        if (!trimmed || trimmed.startsWith('%') || trimmed.startsWith('\\renewcommand') || trimmed.startsWith('\\setlength')) { return; }
-
-                        let prefixHtml = "";
-                        let contentToRender = trimmed;
-                        let isSpecialLine = false;
-                        if (trimmed.match(/^\\(Require|Ensure|Input|Output)/)) {
-                            const isInput = trimmed.match(/^\\(Require|Input)/);
-                            const label = isInput ? 'Input:' : 'Output:';
-                            prefixHtml = `<strong>${label}</strong> `;
-                            contentToRender = trimmed.replace(/^\\(Require|Ensure|Input|Output)\s*/, '');
-                            isSpecialLine = true;
-                        } else if (trimmed.match(/^\\State/)) {
-                            contentToRender = trimmed.replace(/^\\State\s*/, '');
-                            if (contentToRender.startsWith('{') && contentToRender.endsWith('}')) {
-                                contentToRender = contentToRender.substring(1, contentToRender.length - 1);
-                            }
-                        }
-
-                        contentToRender = resolveLatexStyles(contentToRender, html => renderer.protectHtml('style', html));
-                        const renderedContent = renderer.renderInline(contentToRender);
-                        const itemClass = isSpecialLine ? "alg-item alg-item-no-marker" : "alg-item";
-                        listItems += `<li class="${itemClass}">${prefixHtml}${renderedContent}</li>`;
+                    bodyHtml += renderAlgorithmicList(rawBody, params.includes('1'), source => {
+                        return renderer.renderInline(resolveLatexStyles(source, createStyleHtmlProtector(renderer)));
                     });
-
-                    bodyHtml += `<${listTag} class="alg-list">${listItems}</${listTag}>`;
                 }
 
                 let ignoredContent = "";
@@ -219,9 +199,8 @@ export function createTableRule(): PreprocessRule {
         priority: 118,
         apply: (text: string, renderer: RenderContext) => {
             return replaceFloatEnvironment(text, 'table', content => {
-                const extracted = extractRenderedCaption(content, renderer, { className: 'table-caption', label: 'Table', counterType: 'tbl' });
-                content = extracted.content;
-                const captionHtml = extracted.captionHtml;
+                const { content: extractedContent, captionHtml } = extractRenderedCaption(content, renderer, { className: 'table-caption', label: 'Table', counterType: 'tbl' });
+                content = extractedContent;
 
                 let innerContent = content.replace(/\\begin\{threeparttable\}/g, '').replace(/\\end\{threeparttable\}/g, '');
                 let notesHtml = '';

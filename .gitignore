@@ -1,8 +1,14 @@
 out
 dist
+dist-web
 node_modules
 media/vendor/
+media/webview-main.js
+media/webview-pdf.js
 media/webview-*.js.map
+apps/web/*.log
 .vscode-test/
 *.vsix
+src/localtestTeX
+
 tex

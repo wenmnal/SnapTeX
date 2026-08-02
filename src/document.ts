@@ -1,22 +1,26 @@
-import * as vscode from 'vscode';
-import { IFileProvider } from './file-provider';
+import type { IFileProvider } from './file-provider';
 import { extractMetadata } from './metadata';
 import { BibTexParser } from './bib';
-import { BibEntry, SourceLocation, PreambleData, MetadataResult, BlockTextSnapshot, BlockTextSpan, RenderDocumentView } from './types';
-import { R_BIBLIOGRAPHY, R_ADDBIBRESOURCE } from './patterns';
+import { BibEntry, SourceLocation, PreambleData, MetadataResult, BlockTextSnapshot, BlockTextSpan, DocumentDiagnostic, RenderDocumentView, BackendMode, UriLike } from './types';
+import { R_BIBLIOGRAPHY, R_ADDBIBRESOURCE, R_THEBIBLIOGRAPHY } from './patterns';
+import { SNAP_TEX_RULES } from './rules';
 import { LatexBlockSplitter } from './splitter';
-import { normalizeUri, scanLatexBraceBalance, stableHash } from './utils';
+import { extractAstBlockArtifact, type AstBlockArtifact } from './ast/block-metadata';
+import type { AstSplitSnapshot } from './ast/splitter';
+import { splitLatexWithAstIncremental } from './ast/splitter';
+import { getBlockSpanText, lineAtOffset, normalizeUri, scanLatexBraceBalance, stableHash, stripLatexComments } from './utils';
 
 export interface DocumentParseResult {
     bodyText: string;
     blockSpans: BlockTextSpan[];
     blockHashes: string[];
-    metadataSensitiveBlocks: boolean[];
+    astBlockArtifacts?: Array<AstBlockArtifact | undefined>;
     filePool: string[];
     sourceFileIndices: Uint16Array;
     sourceLines: Int32Array;
     metadata: PreambleData;
     bibEntries: Map<string, BibEntry>;
+    diagnostics: DocumentDiagnostic[];
     contentStartLineOffset: number;
 }
 
@@ -25,9 +29,15 @@ interface BibCacheEntry {
     entries: Map<string, BibEntry>;
 }
 
-interface IndexedLine {
-    text: string;
-    line: number;
+interface FlattenOutput {
+    textLines: string[];
+    fileIndices: number[];
+    lines: number[];
+}
+
+interface ParseOptions {
+    trace?: (label: string) => void;
+    backendMode?: BackendMode;
 }
 
 /**
@@ -37,38 +47,52 @@ interface IndexedLine {
  * string, stores block spans instead of duplicated block strings, and keeps
  * compact source maps for editor-preview synchronization.
  */
-export class LatexDocument implements RenderDocumentView {
+export class LatexDocument<TUri extends UriLike = UriLike> implements RenderDocumentView {
     private bodyText: string = "";
     public blockSpans: BlockTextSpan[] = [];
     public blockHashes: string[] = [];
-    public metadataSensitiveBlocks: boolean[] = [];
+    public astBlockArtifacts: Array<AstBlockArtifact | undefined> = [];
 
     public filePool: string[] = [];
     public sourceFileIndices: Uint16Array = new Uint16Array(0);
     public sourceLines: Int32Array = new Int32Array(0);
 
     public contentStartLineOffset: number = 0;
+    public diagnostics: DocumentDiagnostic[] = [];
 
     public metadata: PreambleData = {
         macros: {},
         tikzGlobal: "",
-        tikzMacroMap: new Map()
+        tikzMacroMap: new Map(),
+        authors: [],
+        affiliations: [],
+        keywords: [],
+        custom: {}
     };
     public bibEntries: Map<string, BibEntry> = new Map();
-    public rootDir: vscode.Uri | undefined;
+    public rootDir: TUri | undefined;
 
     private bibCache: Map<string, BibCacheEntry> = new Map();
+    private astSplitSnapshot: AstSplitSnapshot | undefined;
+    private astSplitSnapshotKey: string | undefined;
+    private astArtifactGeneration = 0;
+    private astArtifactPromises = new Map<string, Promise<AstBlockArtifact | undefined>>();
 
-    constructor(private fileProvider: IFileProvider) {}
+    constructor(private fileProvider: IFileProvider<TUri>, private registry = SNAP_TEX_RULES) {}
 
     /**
      * Releases the transient body text after the renderer has taken a snapshot.
+     * Block hashes are kept as compact stale-write guards for lazy AST artifact
+     * updates; spans and text are no longer needed by the document after render.
      */
     public releaseTextContent() {
         this.bodyText = "";
         this.blockSpans = [];
-        this.blockHashes = [];
-        this.metadataSensitiveBlocks = [];
+    }
+
+    public cancelAstArtifactWarmup() {
+        this.astArtifactGeneration++;
+        this.astArtifactPromises.clear();
     }
 
     public getBlockCount(): number {
@@ -77,16 +101,83 @@ export class LatexDocument implements RenderDocumentView {
 
     public getBlockText(index: number): string | undefined {
         const span = this.blockSpans[index];
-        if (!span) { return undefined; }
-        return this.bodyText.slice(span.start, span.end);
+        if (!span || this.bodyText.length === 0) { return undefined; }
+        return getBlockSpanText(this.bodyText, span);
     }
 
     public getBlockHash(index: number): string | undefined {
         return this.blockHashes[index];
     }
 
-    public isMetadataSensitiveBlock(index: number): boolean {
-        return this.metadataSensitiveBlocks[index] === true;
+    public getAstBlockArtifact(index: number): AstBlockArtifact | undefined {
+        return this.astBlockArtifacts[index];
+    }
+
+    public setAstBlockArtifact(index: number, artifact: AstBlockArtifact): void {
+        if (this.blockHashes[index] === artifact.hash) {
+            this.astBlockArtifacts[index] = artifact;
+        }
+    }
+
+    private ensureAstBlockArtifact(
+        index: number,
+        text: string,
+        hash: string
+    ): Promise<AstBlockArtifact | undefined> {
+        const existing = this.astBlockArtifacts[index];
+        if (existing?.hash === hash) {
+            return Promise.resolve(existing);
+        }
+
+        const generation = this.astArtifactGeneration;
+        const key = `${index}:${hash}`;
+        const pending = this.astArtifactPromises.get(key);
+        if (pending) {
+            return pending;
+        }
+
+        const promise = extractAstBlockArtifact(text, hash)
+            .then(artifact => {
+                if (generation === this.astArtifactGeneration) {
+                    this.astBlockArtifacts[index] = artifact;
+                }
+                return artifact;
+            })
+            .catch(() => undefined)
+            .finally(() => {
+                if (generation === this.astArtifactGeneration) {
+                    this.astArtifactPromises.delete(key);
+                }
+            });
+        this.astArtifactPromises.set(key, promise);
+        return promise;
+    }
+
+    public warmAstBlockArtifacts(): Promise<void> {
+        if (this.bodyText.length === 0 || this.blockSpans.length === 0 || this.blockHashes.length === 0) {
+            return Promise.resolve();
+        }
+
+        const generation = this.astArtifactGeneration;
+        const bodyText = this.bodyText;
+        const spans = [...this.blockSpans];
+        const hashes = [...this.blockHashes];
+        return this.warmAstBlockArtifactsSequential(generation, bodyText, spans, hashes);
+    }
+
+    public warmAstBlockArtifactsForIndices(indices: readonly number[]): Promise<void> {
+        if (indices.length === 0 || this.bodyText.length === 0 || this.blockSpans.length === 0 || this.blockHashes.length === 0) {
+            return Promise.resolve();
+        }
+
+        const generation = this.astArtifactGeneration;
+        const bodyText = this.bodyText;
+        const spans = [...this.blockSpans];
+        const hashes = [...this.blockHashes];
+        const sortedIndices = [...new Set(indices)]
+            .filter(index => index >= 0 && index < spans.length)
+            .sort((a, b) => a - b);
+        return this.warmAstBlockArtifactsSequential(generation, bodyText, spans, hashes, sortedIndices);
     }
 
     public createTextSnapshot(): BlockTextSnapshot {
@@ -97,10 +188,11 @@ export class LatexDocument implements RenderDocumentView {
     }
 
     public applyResult(result: DocumentParseResult) {
+        this.cancelAstArtifactWarmup();
         this.bodyText = result.bodyText;
         this.blockSpans = result.blockSpans;
         this.blockHashes = result.blockHashes;
-        this.metadataSensitiveBlocks = result.metadataSensitiveBlocks;
+        this.astBlockArtifacts = result.astBlockArtifacts ?? [];
 
         this.filePool = result.filePool;
         this.sourceFileIndices = result.sourceFileIndices;
@@ -108,6 +200,7 @@ export class LatexDocument implements RenderDocumentView {
 
         this.metadata = result.metadata;
         this.bibEntries = result.bibEntries;
+        this.diagnostics = result.diagnostics;
         this.contentStartLineOffset = result.contentStartLineOffset;
     }
 
@@ -115,99 +208,184 @@ export class LatexDocument implements RenderDocumentView {
      * Parses a root .tex document into metadata, bibliography entries, source
      * mappings, and block spans.
      */
-    public async parse(entryUri: vscode.Uri, contentOverride?: string): Promise<DocumentParseResult> {
+    public async parse(entryUri: TUri, contentOverride?: string, options: ParseOptions = {}): Promise<DocumentParseResult> {
         const filePool: string[] = [];
 
         const rootDir = this.fileProvider.dir(entryUri);
         this.rootDir = rootDir;
 
-        const { textLines, fileIndices, lines } = await this.loadAndFlatten(entryUri, filePool, 0, contentOverride);
-        const normalizedText = textLines.join('\n');
+        const diagnostics: DocumentDiagnostic[] = [];
+        const { textLines, fileIndices, lines } = await this.loadAndFlatten(entryUri, filePool, diagnostics, 0, contentOverride);
+        options.trace?.('after flatten');
+        let normalizedText = textLines.join('\n');
+        textLines.length = 0;
 
-        const metaRes: MetadataResult = extractMetadata(normalizedText);
+        const metaRes: MetadataResult = extractMetadata(normalizedText, this.registry.metadataExtractors);
+        normalizedText = "";
+        options.trace?.('after metadata');
 
-        const bibEntries = await this.loadBibliography(metaRes.cleanedText, rootDir);
-
-        let contentStartLineOffset = 0;
-        const rawDocMatch = normalizedText.match(/\\begin\{document\}/i);
-        if (rawDocMatch && rawDocMatch.index !== undefined) {
-            const preContent = normalizedText.substring(0, rawDocMatch.index + rawDocMatch[0].length);
-            contentStartLineOffset = preContent.split('\n').length - 1;
-        }
+        const bibEntries = await this.loadBibliography(metaRes.cleanedText, rootDir, diagnostics);
 
         let bodyText = metaRes.cleanedText;
-        if (rawDocMatch && rawDocMatch.index !== undefined) {
-             const cleanDocMatch = metaRes.cleanedText.match(/\\begin\{document\}/i);
-             if (cleanDocMatch && cleanDocMatch.index !== undefined) {
-                 const startIndex = cleanDocMatch.index + cleanDocMatch[0].length;
-                 let endIndex = metaRes.cleanedText.search(/\\end\{document\}/i);
-                 if (endIndex === -1) {
-                     endIndex = metaRes.cleanedText.length;
-                 }
-                 bodyText = metaRes.cleanedText.substring(startIndex, endIndex);
-             }
+        const cleanDocMatch = metaRes.cleanedText.match(/\\begin\{document\}/i);
+        let contentStartLineOffset = 0;
+        if (cleanDocMatch && cleanDocMatch.index !== undefined) {
+            const startIndex = cleanDocMatch.index + cleanDocMatch[0].length;
+            contentStartLineOffset = lineAtOffset(metaRes.cleanedText, startIndex);
+            const endIndex = metaRes.cleanedText.search(/\\end\{document\}/i);
+            bodyText = metaRes.cleanedText.substring(startIndex, endIndex === -1 ? metaRes.cleanedText.length : endIndex);
         }
-
-        // Normalize \section{...}\label{...}\n\n\makesectionpage → keep them adjacent
-        // so the beamer_frame rule can render the section title on the section page.
-        // Beamer authors often put a blank line between them; the splitter would otherwise
-        // place them in different blocks. Replace any whitespace (including blank lines)
-        // between the section command and \makesectionpage with a single space.
         bodyText = bodyText.replace(
             /(\\section(?:\[[^\]]*\])?\s*\{(?:[^{}]|\{[^{}]*\})*\}(?:\s*\\label\s*\{[^}]+\})?)\s*\\makesectionpage\b/g,
             '$1 \\makesectionpage'
         );
+        options.trace?.('after body slice');
 
-        const rawBlockObjects = LatexBlockSplitter.split(bodyText);
+        const useAstBackend = options.backendMode === 'ast(experimental)';
+        const splitterOptions = {
+            config: this.registry.splitterConfig,
+            rules: this.registry.splitterRules
+        };
+        const astSplitKey = entryUri.toString();
+        const astSplitResult = useAstBackend
+            ? await splitLatexWithAstIncremental(
+                bodyText,
+                splitterOptions,
+                this.astSplitSnapshotKey === astSplitKey ? this.astSplitSnapshot : undefined
+            )
+            : undefined;
+        const rawBlockObjects = astSplitResult?.spans ?? LatexBlockSplitter.split(bodyText, splitterOptions);
+        if (useAstBackend) {
+            this.astSplitSnapshot = { text: bodyText, spans: rawBlockObjects, coarseSpans: astSplitResult?.coarseSpans };
+            this.astSplitSnapshotKey = astSplitKey;
+        } else {
+            this.astSplitSnapshot = undefined;
+            this.astSplitSnapshotKey = undefined;
+        }
+        options.trace?.('after split');
 
         const res: DocumentParseResult = {
             bodyText,
             blockSpans: [],
             blockHashes: [],
-            metadataSensitiveBlocks: [],
             filePool,
             sourceFileIndices: new Uint16Array(fileIndices),
             sourceLines: new Int32Array(lines),
             metadata: metaRes.data,
             bibEntries,
+            diagnostics,
             contentStartLineOffset
         };
+        fileIndices.length = 0;
+        lines.length = 0;
+
+        const previousArtifacts = useAstBackend
+            ? this.buildPreviousAstArtifactCache()
+            : undefined;
+        if (useAstBackend) {
+            res.astBlockArtifacts = [];
+        }
 
         for (const b of rawBlockObjects) {
-            const blockText = bodyText.slice(b.start, b.end);
+            const blockText = getBlockSpanText(bodyText, b);
             if (this.hasRenderableContent(blockText)) {
+                const hash = stableHash(blockText);
                 res.blockSpans.push(b);
-                res.blockHashes.push(stableHash(blockText));
-                res.metadataSensitiveBlocks.push(blockText.trim().includes('\\maketitle'));
+                res.blockHashes.push(hash);
+                if (res.astBlockArtifacts) {
+                    const cached = previousArtifacts?.get(hash);
+                    res.astBlockArtifacts.push(cached ?? (
+                        this.shouldBuildInitialAstArtifact(b)
+                            ? await extractAstBlockArtifact(blockText, hash)
+                            : undefined
+                    ));
+                }
             }
         }
+        options.trace?.('after block hashes');
 
         return res;
     }
 
     private hasRenderableContent(text: string): boolean {
-        const withoutComments = text
-            .split(/\r?\n/)
-            .map(line => {
-                const commentStart = line.search(/(?<!\\)%/);
-                return commentStart === -1 ? line : line.substring(0, commentStart);
-            })
-            .join('\n');
-
-        const withoutListStructure = withoutComments
+        const withoutListStructure = stripLatexComments(text)
             .replace(/\\(?:begin|end)\{(?:itemize|enumerate)\}/g, '')
             .replace(/\\item(?:\[[^\]]*\])?/g, '');
 
         return withoutListStructure.trim().length > 0;
     }
 
+    private shouldBuildInitialAstArtifact(span: BlockTextSpan): boolean {
+        return span.lineCount > this.registry.splitterConfig.maxBlockLines;
+    }
+
+    private async warmAstBlockArtifactsSequential(
+        generation: number,
+        bodyText: string,
+        spans: readonly BlockTextSpan[],
+        hashes: readonly string[],
+        indices?: readonly number[]
+    ) {
+        const warmIndex = async (index: number) => {
+            if (generation !== this.astArtifactGeneration) {
+                return false;
+            }
+            const hash = hashes[index];
+            const span = spans[index];
+            if (!hash || !span || this.astBlockArtifacts[index]?.hash === hash) {
+                return true;
+            }
+            await this.ensureAstBlockArtifact(index, getBlockSpanText(bodyText, span), hash);
+            await new Promise(resolve => setTimeout(resolve, 0));
+            return true;
+        };
+
+        if (indices) {
+            for (const index of indices) {
+                if (!await warmIndex(index)) { return; }
+            }
+            return;
+        }
+
+        for (let index = 0; index < spans.length; index++) {
+            if (!await warmIndex(index)) { return; }
+        }
+    }
+
+    private buildPreviousAstArtifactCache(): Map<string, AstBlockArtifact> {
+        const cache = new Map<string, AstBlockArtifact>();
+        for (const artifact of this.astBlockArtifacts) {
+            if (artifact) {
+                cache.set(artifact.hash, artifact);
+            }
+        }
+        return cache;
+    }
+
     private async loadAndFlatten(
-        fileUri: vscode.Uri,
+        fileUri: TUri,
         filePool: string[],
+        diagnostics: DocumentDiagnostic[],
         depth: number = 0,
         contentOverride?: string
-    ): Promise<{ textLines: string[], fileIndices: number[], lines: number[] }> {
-        if (depth > 20) { return { textLines: [], fileIndices: [], lines: [] }; }
+    ): Promise<FlattenOutput> {
+        const output: FlattenOutput = { textLines: [], fileIndices: [], lines: [] };
+        await this.flattenInto(fileUri, filePool, output, diagnostics, depth, contentOverride);
+        return output;
+    }
+
+    private async flattenInto(
+        fileUri: TUri,
+        filePool: string[],
+        output: FlattenOutput,
+        diagnostics: DocumentDiagnostic[],
+        depth: number = 0,
+        contentOverride?: string
+    ): Promise<void> {
+        if (depth > 20) {
+            diagnostics.push({ message: `Input nesting is too deep near ${fileUri.toString()}` });
+            return;
+        }
 
         let content = "";
         const filePathStr = fileUri.toString();
@@ -222,39 +400,37 @@ export class LatexDocument implements RenderDocumentView {
             content = contentOverride;
         } else {
             if (!(await this.fileProvider.exists(fileUri))) {
-                return {
-                    textLines: [`% [SnapTeX] File not found: ${filePathStr}`],
-                    fileIndices: [currentFileIndex],
-                    lines: [0]
-                };
+                diagnostics.push({ message: `Missing input file: ${filePathStr}` });
+                output.textLines.push(`% [SnapTeX] File not found: ${filePathStr}`);
+                output.fileIndices.push(currentFileIndex);
+                output.lines.push(0);
+                return;
             }
             try {
                 content = await this.fileProvider.read(fileUri);
             } catch (e) {
-                return {
-                    textLines: [`% [SnapTeX] Error reading: ${filePathStr}`],
-                    fileIndices: [currentFileIndex],
-                    lines: [0]
-                };
+                diagnostics.push({ message: `Error reading input file: ${filePathStr}` });
+                output.textLines.push(`% [SnapTeX] Error reading: ${filePathStr}`);
+                output.fileIndices.push(currentFileIndex);
+                output.lines.push(0);
+                return;
             }
         }
 
-        const sourceLines = content.split(/\r?\n/).map((text, line) => ({ text, line }));
-        const rawLines = depth > 0 ? this.stripStandaloneWrapper(sourceLines) : sourceLines;
-        const flattenedLines: string[] = [];
-        const outIndices: number[] = [];
-        const outLines: number[] = [];
+        const sourceLines = content.split(/\r?\n/);
+        const selectedLines = depth > 0 ? this.selectStandaloneLines(sourceLines) : undefined;
         const inputRegex = /^(\s*)(?:\\input|\\include)\{([^}]+)\}/;
+        const lineCount = selectedLines?.length ?? sourceLines.length;
 
-        for (let i = 0; i < rawLines.length; i++) {
-            const sourceLine = rawLines[i];
-            const line = sourceLine.text.replace(/\r/g, '');
+        for (let i = 0; i < lineCount; i++) {
+            const sourceLineNumber = selectedLines ? selectedLines[i] : i;
+            const line = sourceLines[sourceLineNumber].replace(/\r/g, '');
             const trimmed = line.trim();
 
             if (trimmed.startsWith('%')) {
-                flattenedLines.push(line);
-                outIndices.push(currentFileIndex);
-                outLines.push(sourceLine.line);
+                output.textLines.push(line);
+                output.fileIndices.push(currentFileIndex);
+                output.lines.push(sourceLineNumber);
                 continue;
             }
 
@@ -266,54 +442,48 @@ export class LatexDocument implements RenderDocumentView {
                 const currentDir = this.fileProvider.dir(fileUri);
                 const targetUri = this.fileProvider.resolve(currentDir, relPath);
 
-                const result = await this.loadAndFlatten(targetUri, filePool, depth + 1);
-                const len = result.textLines.length;
-                for (let j = 0; j < len; j++) {
-                    flattenedLines.push(result.textLines[j]);
-                    outIndices.push(result.fileIndices[j]);
-                    outLines.push(result.lines[j]);
-                }
+                await this.flattenInto(targetUri, filePool, output, diagnostics, depth + 1);
             } else {
-                flattenedLines.push(line);
-                outIndices.push(currentFileIndex);
-                outLines.push(sourceLine.line);
+                output.textLines.push(line);
+                output.fileIndices.push(currentFileIndex);
+                output.lines.push(sourceLineNumber);
             }
         }
-
-        return { textLines: flattenedLines, fileIndices: outIndices, lines: outLines };
     }
 
-    private stripStandaloneWrapper(lines: IndexedLine[]): IndexedLine[] {
-        const beginIndex = lines.findIndex(line => /\\begin\{document\}/i.test(line.text));
-        if (beginIndex === -1) { return lines; }
+    private selectStandaloneLines(lines: string[]): number[] | undefined {
+        const beginIndex = lines.findIndex(line => /\\begin\{document\}/i.test(line));
+        if (beginIndex === -1) { return undefined; }
 
-        const endOffset = lines.slice(beginIndex + 1).findIndex(line => /\\end\{document\}/i.test(line.text));
-        if (endOffset === -1) { return lines; }
+        const endOffset = lines.slice(beginIndex + 1).findIndex(line => /\\end\{document\}/i.test(line));
+        if (endOffset === -1) { return undefined; }
 
         const endIndex = beginIndex + 1 + endOffset;
-        return [
-            ...this.extractPortablePreambleLines(lines.slice(0, beginIndex)),
-            ...lines.slice(beginIndex + 1, endIndex)
-        ];
+        const selected = this.extractPortablePreambleLines(lines, beginIndex);
+        for (let index = beginIndex + 1; index < endIndex; index++) {
+            selected.push(index);
+        }
+        return selected;
     }
 
-    private extractPortablePreambleLines(lines: IndexedLine[]): IndexedLine[] {
-        const portableLines: IndexedLine[] = [];
+    private extractPortablePreambleLines(lines: string[], endExclusive: number): number[] {
+        const portableLines: number[] = [];
         let capturingDefinition = false;
         let braceDepth = 0;
         const portableCommandRegex = /^\\(?:(?:provide|re)?newcommand\*?|g?def|DeclareMathOperator\*?|usetikzlibrary|tikzset|definecolor)(?=\s|\\|\{|\[|$)/;
 
-        for (const line of lines) {
-            const trimmed = line.text.trim();
+        for (let index = 0; index < endExclusive; index++) {
+            const line = lines[index];
+            const trimmed = line.trim();
             if (!capturingDefinition && !portableCommandRegex.test(trimmed)) {
                 continue;
             }
 
-            portableLines.push(line);
+            portableLines.push(index);
             capturingDefinition = true;
-            braceDepth += scanLatexBraceBalance(line.text, { commentMode: 'stop' }).depth;
+            braceDepth += scanLatexBraceBalance(line, { commentMode: 'stop' }).depth;
 
-            if (braceDepth <= 0 && /}/.test(line.text)) {
+            if (braceDepth <= 0 && /}/.test(line)) {
                 capturingDefinition = false;
                 braceDepth = 0;
             }
@@ -322,32 +492,34 @@ export class LatexDocument implements RenderDocumentView {
         return portableLines;
     }
 
-    private async loadBibliography(text: string, rootDir: vscode.Uri): Promise<Map<string, BibEntry>> {
-        // Try biblatex \addbibresource{ref.bib} first
-        let match = text.match(R_ADDBIBRESOURCE);
-        if (!match) {
-            // Fallback to bibtex \bibliography{ref}
-            match = text.match(R_BIBLIOGRAPHY);
+    private async loadBibliography(text: string, rootDir: TUri, diagnostics: DocumentDiagnostic[]): Promise<Map<string, BibEntry>> {
+        const inlineBibliography = text.match(R_THEBIBLIOGRAPHY);
+        if (inlineBibliography) {
+            return BibTexParser.parseBibItems(inlineBibliography[0]);
         }
 
-        if (match) {
-            let bibFile = match[1].trim();
-            if (!bibFile.endsWith('.bib')) { bibFile += '.bib'; }
-            const bibUri = this.fileProvider.resolve(rootDir, bibFile);
-            const bibUriStr = bibUri.toString();
+        const match = text.match(R_ADDBIBRESOURCE) ?? text.match(R_BIBLIOGRAPHY);
+        if (!match) { return new Map(); }
 
-            try {
-                const { mtime } = await this.fileProvider.stat(bibUri);
-                if (mtime === 0) { return new Map(); }
-                const cached = this.bibCache.get(bibUriStr);
-                if (cached && cached.mtime === mtime) { return cached.entries; }
-                const content = await this.fileProvider.read(bibUri);
-                const entries = BibTexParser.parse(content);
-                this.bibCache.set(bibUriStr, { mtime, entries });
-                return entries;
-            } catch (e) {
-                console.error('Failed to load bib file:', e);
+        let bibFile = match[1].trim();
+        if (!bibFile.endsWith('.bib')) { bibFile += '.bib'; }
+        const bibUri = this.fileProvider.resolve(rootDir, bibFile);
+        const bibUriStr = bibUri.toString();
+
+        try {
+            const { mtime } = await this.fileProvider.stat(bibUri);
+            if (mtime === 0) {
+                diagnostics.push({ message: `Missing bibliography file: ${bibUriStr}` });
+                return new Map();
             }
+            const cached = this.bibCache.get(bibUriStr);
+            if (cached && cached.mtime === mtime) { return cached.entries; }
+            const entries = BibTexParser.parse(await this.fileProvider.read(bibUri));
+            this.bibCache.set(bibUriStr, { mtime, entries });
+            return entries;
+        } catch (e) {
+            console.error('Failed to load bib file:', e);
+            diagnostics.push({ message: `Error reading bibliography file: ${bibUriStr}` });
         }
         return new Map();
     }

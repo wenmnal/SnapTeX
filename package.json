@@ -2,7 +2,7 @@
   "name": "snaptex",
   "displayName": "SnapTeX",
   "description": "A Snappy, Smooth, and Feasible Previewer for LaTeX",
-  "version": "0.6.5",
+  "version": "0.7.1",
   "icon": "media/icon.png",
   "publisher": "qstatsite",
   "license": "GPL-3.0-or-later",
@@ -11,7 +11,7 @@
     "url": "https://github.com/qianchd/snaptex.git"
   },
   "engines": {
-    "vscode": "^1.107.0"
+    "vscode": "^1.80.0"
   },
   "categories": [
     "Visualization",
@@ -91,8 +91,8 @@
       },
       {
         "command": "snaptex.syncToPreview",
-        "key": "ctrl+alt+n",
-        "mac": "cmd+alt+n",
+        "key": "ctrl+alt+m",
+        "mac": "cmd+alt+m",
         "when": "editorTextFocus && (editorLangId == latex || editorLangId == tex)"
       }
     ],
@@ -146,7 +146,7 @@
             "mathjax"
           ],
           "default": "katex",
-          "markdownDescription": "Math rendering engine. `katex` is fast and lightweight; `mathjax` supports more LaTeX packages (e.g. `physics`, `mathtools`, `braket`, `cancel`).",
+          "markdownDescription": "Math rendering engine. `katex` is fast and lightweight; `mathjax` supports more LaTeX packages (for example `physics`, `mathtools`, `braket`, and `cancel`).",
           "enumDescriptions": [
             "KaTeX — fast, lightweight math renderer (default)",
             "MathJax — broader LaTeX compatibility, supports physics and more packages"
@@ -160,28 +160,41 @@
             "dark"
           ],
           "default": "auto",
-          "description": "Preview color theme. 'auto' follows the active VS Code theme; 'light' and 'dark' force the preview to a fixed palette independent of the editor.",
+          "description": "Preview color theme. 'auto' follows the active VS Code theme; 'light' and 'dark' force a fixed preview palette.",
           "enumDescriptions": [
             "Auto — follow the current VS Code editor theme",
             "Light — force a light preview palette",
             "Dark — force a dark preview palette"
           ]
+        },
+        "snaptex.backendMode": {
+          "type": "string",
+          "enum": [
+            "legacy",
+            "ast(experimental)"
+          ],
+          "default": "legacy",
+          "description": "Choose the preview processing mode. Use 'ast(experimental)' to test AST-assisted splitting, dependencies, rendering, and sync while keeping the same lazy loading and virtualization runtime."
         }
       }
     }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",
-    "compile": "npm run check-types && npm run lint && node esbuild.js",
+    "compile": "npm run check-types && npm run lint && node esbuild.js --target=vscode",
     "watch": "npm-run-all -p watch:*",
-    "watch:esbuild": "node esbuild.js --watch",
+    "watch:esbuild": "node esbuild.js --watch --target=vscode",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
-    "package": "npm run check-types && npm run lint && node esbuild.js --production",
-    "compile-tests": "tsc -p . --outDir out",
+    "package": "npm run check-types && npm run lint && node esbuild.js --production --target=vscode",
+    "compile-tests": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\" && tsc -p . --outDir out",
     "watch-tests": "tsc -p . -w --outDir out",
     "pretest": "npm run compile-tests && npm run compile && npm run lint",
     "check-types": "tsc --noEmit",
-    "lint": "eslint src",
+    "lint": "eslint src apps/vscode/src apps/standalone/src apps/web/src",
+    "web:build": "node esbuild.js --target=web",
+    "web:build-static": "npm run web:build && node apps/web/build-static.mjs",
+    "web:serve": "npm run web:build-static && node apps/web/server.mjs dist-web",
+    "web:serve-source": "npm run web:build && node apps/web/server.mjs .",
     "test": "vscode-test"
   },
   "devDependencies": {
@@ -189,7 +202,7 @@
     "@types/markdown-it": "^14.1.2",
     "@types/mocha": "^10.0.10",
     "@types/node": "^22.19.17",
-    "@types/vscode": "^1.107.0",
+    "@types/vscode": "^1.80.0",
     "@vscode/test-cli": "^0.0.11",
     "@vscode/test-electron": "^2.5.2",
     "esbuild": "^0.27.1",
@@ -199,10 +212,18 @@
     "typescript-eslint": "^8.48.1"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.10.4",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/state": "^6.7.0",
+    "@codemirror/view": "^6.43.5",
+    "@lezer/highlight": "^1.2.3",
     "@planktimerr/tikzjax": "^1.0.0",
+    "@unified-latex/unified-latex-util-parse": "^1.8.4",
+    "codemirror": "^6.0.2",
+    "codemirror-lang-latex": "^0.4.1",
     "katex": "^0.16.27",
     "markdown-it": "^14.1.0",
-    "mathjax": "^3.2.2",
     "mathjax-full": "^3.2.2",
     "pdfjs-dist": "^5.4.449"
   }

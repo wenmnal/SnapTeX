@@ -3,13 +3,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { DocumentParseResult, LatexDocument } from '../document';
-import { IFileProvider } from '../file-provider';
+import type { IFileProvider } from '../file-provider';
 import { SmartRenderer } from '../renderer';
 import { BlockTextProvider, LatexCounterScanner } from '../scanner';
-import { BlockTextSpan } from '../types';
-import { normalizeUri, stableHash } from '../utils';
+import { AffiliationMetadata, AuthorMetadata, BlockTextSpan } from '../types';
+import { getBlockSpanText, normalizeUri, stableHash } from '../utils';
 
-export class MemoryFileProvider implements IFileProvider {
+export class MemoryFileProvider implements IFileProvider<vscode.Uri> {
     constructor(private readonly files: Map<string, string> = new Map()) {}
 
     async read(uri: vscode.Uri): Promise<string> {
@@ -43,8 +43,11 @@ export function createDocument(
         macros?: Record<string, string>;
         tikzGlobal?: string;
         title?: string;
-        author?: string;
         date?: string;
+        authors?: AuthorMetadata[];
+        affiliations?: AffiliationMetadata[];
+        keywords?: string[];
+        custom?: Record<string, string>;
     } = {}
 ): LatexDocument {
     const doc = new LatexDocument(new MemoryFileProvider());
@@ -74,7 +77,6 @@ export function createDocument(
         bodyText,
         blockSpans,
         blockHashes: blockTexts.map(text => stableHash(text)),
-        metadataSensitiveBlocks: blockTexts.map(text => text.trim().includes('\\maketitle')),
         filePool: [],
         sourceFileIndices: new Uint16Array(0),
         sourceLines: new Int32Array(0),
@@ -83,10 +85,14 @@ export function createDocument(
             tikzGlobal: options.tikzGlobal ?? '',
             tikzMacroMap: new Map(),
             title: options.title,
-            author: options.author,
-            date: options.date
+            date: options.date,
+            authors: options.authors ?? [],
+            affiliations: options.affiliations ?? [],
+            keywords: options.keywords ?? [],
+            custom: options.custom ?? {}
         },
         bibEntries: new Map(),
+        diagnostics: [],
         contentStartLineOffset: 0
     });
     return doc;
@@ -101,11 +107,11 @@ export function renderBlocks(blockTexts: string[]): string {
 }
 
 export function readFixture(name: string): string {
-    return fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'test', 'fixtures', name), 'utf8');
+    return fs.readFileSync(path.join(__dirname, '..', '..', '..', 'src', 'test', 'fixtures', name), 'utf8');
 }
 
 export function spanText(text: string, span: BlockTextSpan): string {
-    return text.slice(span.start, span.end);
+    return getBlockSpanText(text, span);
 }
 
 export function resultBlockTexts(result: DocumentParseResult): string[] {

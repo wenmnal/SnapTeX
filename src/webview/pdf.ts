@@ -1,24 +1,30 @@
 // @ts-nocheck
 /* eslint-disable curly */
-import { ExtensionToWebviewCommand, WebviewToExtensionCommand } from '../webview-messages';
+import { HostToPreviewCommand, PreviewToHostCommand } from '../preview-messages';
+import { getPreviewBridge } from './bridge';
 
-const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
-    window.snaptexVsCodeApi = vscode;
+const previewBridge = getPreviewBridge();
     const pdfJsUri = document.body.dataset.pdfJsUri || '';
     const pdfWorkerUri = document.body.dataset.pdfWorkerUri || '';
     let pdfjsLib = null;
+    let pdfRuntimeReady = null;
 
     /**
      * Handles PDF.js loading and canvas rendering inside the webview.
      *
-     * The extension host validates paths and returns webview-safe URIs; this
+     * The preview host validates paths and returns runtime-safe URIs; this
      * module only consumes those URIs and paints the first page into canvases.
      */
-    const pdfRuntimeReady = import(pdfJsUri).then(module => {
-        pdfjsLib = module;
-        pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUri;
-        return setupPdfWorker();
-    });
+    function ensurePdfRuntimeReady() {
+        if (!pdfRuntimeReady) {
+            pdfRuntimeReady = import(pdfJsUri).then(module => {
+                pdfjsLib = module;
+                pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUri;
+                return setupPdfWorker();
+            });
+        }
+        return pdfRuntimeReady;
+    }
 
     async function setupPdfWorker() {
         if (!('Worker' in window) || !('fetch' in window) || !('Blob' in window) || !URL.createObjectURL) {
@@ -52,7 +58,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
 
     window.addEventListener('message', event => {
         const msg = event.data;
-        if (msg.command === ExtensionToWebviewCommand.PdfUri) {
+        if (msg.command === HostToPreviewCommand.PdfUri) {
             if (msg.error || !msg.uri) {
                 renderPdfError(msg.id, msg.error || 'Error loading PDF');
             } else {
@@ -127,7 +133,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
         if (!canvas) return;
 
         try {
-            await pdfRuntimeReady;
+            await ensurePdfRuntimeReady();
             await renderPdfDocument(canvas, pdfjsLib.getDocument({
                 url: pdfUri,
                 disableRange: true,
@@ -147,8 +153,8 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
 
         canvas.setAttribute('data-requested', 'true');
 
-        vscode.postMessage({
-            command: WebviewToExtensionCommand.RequestPdf,
+        previewBridge.postMessage({
+            command: PreviewToHostCommand.RequestPdf,
             id: canvasId,
             path: path
         });

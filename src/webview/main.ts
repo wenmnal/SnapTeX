@@ -1,13 +1,14 @@
 // @ts-nocheck
 /* eslint-disable curly */
 import { CoalescingTaskScheduler } from './scheduler';
-import { BLOCK_VIRTUALIZATION_CLEANUP_DELAY_MS, BlockVirtualizationController, isElementWithinViewportMargins, parseFirstElementFromHtml } from './virtualization';
+import { BLOCK_VIRTUALIZATION_CLEANUP_DELAY_MS, BlockVirtualizationController, isElementWithinViewportMargins, parseFirstElementFromHtml, viewportHeightToPixels } from './virtualization';
 import { hasRenderedTikz, setTikzContainerState, TIKZ_BATCH_RENDER_TIMEOUT_MS, TIKZ_RENDER_DEBOUNCE_MS, TIKZ_SCRIPT_SELECTOR } from './tikz';
-import { ExtensionToWebviewCommand, WebviewToExtensionCommand } from '../webview-messages';
-const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
-    window.snaptexVsCodeApi = vscode;
-    const PDF_RENDER_MARGIN = 1200;
-    const PDF_RELEASE_MARGIN = 3600;
+import { HostToPreviewCommand, PreviewToHostCommand } from '../preview-messages';
+import { getPreviewBridge } from './bridge';
+const previewBridge = getPreviewBridge();
+    const PREVIEW_LAYOUT_WIDTH_CHANGE_EPSILON_PX = 12;
+    const PDF_RENDER_MARGIN_VH = 130;
+    const PDF_RELEASE_MARGIN_VH = 380;
     window.pdfReqQueue = [];
     window.renderPdfToCanvas = function(path, canvasId) {
         window.pdfReqQueue.push({ path, canvasId });
@@ -31,7 +32,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                     if (parentTooltip && !parentTooltip.classList.contains('pinned')) {
                         return;
                     }
-                    this.onLinkEnter(link);
+                    this.onLinkEnter(link, e.clientY);
                 }
             });
 
@@ -48,12 +49,12 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
 
         }
 
-        onLinkEnter(link) {
+        onLinkEnter(link, anchorY) {
             if (!this.activeTransientTooltip || this.activeTransientTooltip.isPinned) {
                 this.activeTransientTooltip = new Tooltip(this);
             }
 
-            this.activeTransientTooltip.scheduleShow(link);
+            this.activeTransientTooltip.scheduleShow(link, anchorY);
         }
 
         onLinkLeave() {
@@ -88,6 +89,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
 
             this.isPinned = false;
             this.currentLink = null;
+            this.anchorY = null;
             this.hideTimer = null;
             this.showTimer = null;
 
@@ -242,11 +244,12 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             this.element.style.cursor = '';
         }
 
-        scheduleShow(link) {
+        scheduleShow(link, anchorY) {
             this.clearHideTimer();
             if (this.currentLink === link && this.element.classList.contains('visible')) return;
 
             if (this.showTimer) clearTimeout(this.showTimer);
+            this.anchorY = anchorY ?? null;
 
             this.showTimer = setTimeout(() => {
                 this.onLinkEnter(link);
@@ -320,7 +323,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
 
             this.contentContainer.appendChild(frag);
             this.refreshPDFs();
-            this.positionTooltip(linkElement);
+            this.positionTooltip(linkElement, this.anchorY);
 
             setTimeout(() => {
                  this.triggerTikzRendering();
@@ -334,7 +337,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
         async resolveContextBlocks(container) {
             const controller = window.snaptexPreviewController;
             if (controller && typeof controller.getTooltipContextBlocks === 'function') {
-                return await controller.getTooltipContextBlocks(container);
+                return controller.getTooltipContextBlocks(container);
             }
             return [container.previousElementSibling, container, container.nextElementSibling]
                 .filter(block => block && block.classList.contains('latex-block'));
@@ -353,7 +356,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
 
             const controller = window.snaptexPreviewController;
             if (controller && typeof controller.ensureAnchorMounted === 'function') {
-                return await controller.ensureAnchorMounted(targetId);
+                return controller.ensureAnchorMounted(targetId);
             }
             return null;
         }
@@ -386,18 +389,32 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             });
         }
 
-        positionTooltip(linkElement) {
+        getTooltipBounds() {
+            const host = document.getElementById('preview-pane') || document.getElementById('content-root');
+            const rect = host?.getBoundingClientRect();
+            if (rect && rect.width > 0) {
+                return rect;
+            }
+            return { left: 0, right: window.innerWidth, width: window.innerWidth };
+        }
+
+        positionTooltip(linkElement, anchorY) {
             const linkRect = linkElement.getBoundingClientRect();
             const viewportHeight = window.innerHeight;
             const margin = 15;
+            const bounds = this.getTooltipBounds();
+            const maxWidth = Math.max(300, bounds.width - margin * 2);
+            const verticalAnchor = anchorY ?? linkRect.top + linkRect.height / 2;
 
-            const isTopHalf = linkRect.top < (viewportHeight / 2);
+            this.element.style.maxWidth = `${maxWidth}px`;
+            this.element.style.left = `${bounds.left + margin}px`;
+            this.element.style.right = 'auto';
 
-            if (isTopHalf) {
-                this.element.style.top = `${linkRect.bottom + margin}px`;
+            if (verticalAnchor < viewportHeight / 2) {
+                this.element.style.top = `${verticalAnchor + margin}px`;
+                this.element.style.bottom = '';
             } else {
-                const bottomDist = viewportHeight - linkRect.top + margin;
-                this.element.style.bottom = `${bottomDist}px`;
+                this.element.style.bottom = `${viewportHeight - verticalAnchor + margin}px`;
                 this.element.style.top = 'auto';
             }
         }
@@ -416,21 +433,35 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             this.isFirstLoad = true;
             this.lastScrollTime = 0;
             this.scrollCommandSeq = 0;
-            this.lastVirtualScrollY = window.scrollY;
-            this.scrollDirection = 'none';
+            this.renderCompletionSeq = 0;
+            this.previewLayoutSyncSuppressedUntil = 0;
+            this.lastPreviewWidth = this.getPreviewWidth();
             this.virtualUpdateFrame = null;
             this.virtualCleanupTimer = null;
             this.config = {
                 autoScrollDelay: 100,
                 debugMemory: false,
-                virtualMode: true
+                virtualMode: true,
+                previewTheme: 'auto'
             };
             this.currentNumbering = null;
             this.blockHtmlRequestSeq = 0;
             this.pendingBlockHtmlRequests = new Map();
             this.pdfObserver = null;
             this.pdfRenderTimer = null;
+            this.deferHeavyPreviewWork = false;
+            this.initialExpansionFrame = null;
             this.virtualization = new BlockVirtualizationController(this.contentRoot);
+            this.debugStats = {
+                blockHtmlRequestsSent: 0,
+                blockHtmlResponses: 0,
+                blockHtmlChars: 0,
+                maxBlockHtmlChars: 0,
+                blockMounts: 0,
+                tikzBatchRuns: 0,
+                tikzActivatedScripts: 0,
+                pdfRenderRuns: 0
+            };
             window.snaptexPreviewController = this;
             this.tikzRenderScheduler = new CoalescingTaskScheduler({
                 debounceMs: TIKZ_RENDER_DEBOUNCE_MS,
@@ -446,7 +477,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             this.initPdfObserver();
             this.injectThemeToggle();
             this.bindEvents();
-            vscode.postMessage({ command: WebviewToExtensionCommand.WebviewLoaded });
+            previewBridge.postMessage({ command: PreviewToHostCommand.PreviewLoaded });
         }
 
         injectThemeToggle() {
@@ -457,7 +488,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             btn.title = 'SnapTeX: cycle preview theme (Auto / Light / Dark)';
             btn.textContent = '◐';
             btn.addEventListener('click', () => {
-                vscode.postMessage({ command: WebviewToExtensionCommand.ToggleTheme });
+                previewBridge.postMessage({ command: PreviewToHostCommand.ToggleTheme });
             });
             document.body.appendChild(btn);
         }
@@ -465,14 +496,39 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
         bindEvents() {
             window.addEventListener('message', event => this.onMessage(event));
             window.addEventListener('scroll', () => {
-                this.updateScrollDirection();
                 this.requestVirtualizedUpdate({ allowUnmount: false });
                 this.scheduleVirtualizedCleanup();
                 this.onScroll();
             });
-            window.addEventListener('resize', () => this.updateVirtualizedBlocks({ allowUnmount: true }));
+            window.addEventListener('resize', () => this.onPreviewResize());
+            if (typeof ResizeObserver !== 'undefined' && this.contentRoot) {
+                this.previewResizeObserver = new ResizeObserver(entries => {
+                    const width = entries[0]?.contentRect?.width;
+                    this.onPreviewResize(width);
+                });
+                this.previewResizeObserver.observe(this.contentRoot);
+            }
             document.addEventListener('dblclick', event => this.onDoubleClick(event));
             document.addEventListener('click', event => this.onInternalLinkClick(event));
+        }
+
+        getSyncSuppressionDuration() {
+            return Math.max(500, this.config.autoScrollDelay + 300);
+        }
+
+        getPreviewWidth() {
+            const rect = this.contentRoot?.getBoundingClientRect();
+            return rect && rect.width > 0 ? rect.width : window.innerWidth;
+        }
+
+        onPreviewResize(width = this.getPreviewWidth()) {
+            this.updateVirtualizedBlocks({ allowUnmount: true });
+            if (!Number.isFinite(width) || width <= 0 || Math.abs(width - this.lastPreviewWidth) < PREVIEW_LAYOUT_WIDTH_CHANGE_EPSILON_PX) {
+                return;
+            }
+            this.lastPreviewWidth = width;
+            this.previewLayoutSyncSuppressedUntil = Date.now() + this.getSyncSuppressionDuration();
+            previewBridge.postMessage({ command: PreviewToHostCommand.PreviewLayoutChanged });
         }
 
         lockScrolling(duration) {
@@ -486,19 +542,19 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
         onMessage(event) {
             const { command, payload } = event.data;
             switch (command) {
-                case ExtensionToWebviewCommand.Update:
+                case HostToPreviewCommand.Update:
                     this.handleUpdate(payload);
                     break;
 
-                case ExtensionToWebviewCommand.ScrollToBlock:
+                case HostToPreviewCommand.ScrollToBlock:
                     this.handleScrollCommand(event.data);
                     break;
 
-                case ExtensionToWebviewCommand.BlockHtml:
+                case HostToPreviewCommand.BlockHtml:
                     this.handleBlockHtml(event.data);
                     break;
 
-                case ExtensionToWebviewCommand.Config:
+                case HostToPreviewCommand.Config:
                     if (event.data.config && typeof event.data.config.autoScrollDelay === 'number') {
                         this.config.autoScrollDelay = Math.max(0, event.data.config.autoScrollDelay);
                     }
@@ -509,6 +565,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                     this.virtualization.setEnabled(event.data.config.virtualMode !== false);
                     this.updateVirtualizedBlocks({ allowUnmount: true });
                     if (event.data.config && typeof event.data.config.previewTheme === 'string') {
+                        this.config.previewTheme = event.data.config.previewTheme;
                         this.applyPreviewTheme(event.data.config.previewTheme);
                     }
                     break;
@@ -521,47 +578,134 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
         }
 
         handleUpdate(payload) {
+            this.logPayloadStats(payload);
+            if (payload.resetPreviewState) {
+                this.resetPreviewRuntimeState();
+            }
             if (payload.numbering) {
                 this.currentNumbering = payload.numbering;
             }
             if (payload.type === 'full') {
+                const renderSeq = ++this.renderCompletionSeq;
                 this.state = 'RENDERING';
+                this.deferHeavyPreviewWork = this.isFirstLoad && !!payload.blocks && this.virtualization.isEnabled();
                 const scrollState = this.saveScrollState();
                 document.body.classList.add('preload-mode');
                 if (payload.blocks && this.virtualization.isEnabled()) {
-                    this.smartFullUpdateFromBlockMetadata(payload.blocks);
+                    this.smartFullUpdateFromBlockMetadata(payload.blocks, {
+                        phase: this.deferHeavyPreviewWork ? 'initial' : 'normal'
+                    });
                 } else if (payload.htmls) {
                     this.smartFullUpdateFromBlocks(payload.htmls, payload.preserveUnchangedBlocks !== false);
                 }
                 this.logDomStats('after full update');
                 document.fonts.ready.then(() => {
                     requestAnimationFrame(() => {
-                        requestAnimationFrame(() => { this.onRenderComplete(scrollState); });
+                        requestAnimationFrame(() => { this.onRenderComplete(scrollState, renderSeq); });
                     });
                 });
             } else if (payload.type === 'patch') {
+                const renderSeq = ++this.renderCompletionSeq;
+                this.state = 'RENDERING';
+                this.previewLayoutSyncSuppressedUntil = Date.now() + this.getSyncSuppressionDuration();
+                const scrollState = this.saveScrollState();
                 this.applyPatch(payload);
                 this.logDomStats('after patch update');
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => { this.onPatchComplete(scrollState, renderSeq); });
+                });
             }
             if (payload.numbering) {
                 requestAnimationFrame(() => this.applyNumbering(payload.numbering));
             }
-            this.schedulePendingPdfRender();
+            if (!this.deferHeavyPreviewWork) {
+                this.scheduleHeavyPreviewWork();
+            }
+        }
 
-            this.triggerTikzRendering();
+        resetPreviewRuntimeState() {
+            this.pendingBlockHtmlRequests.clear();
+            this.virtualization.resetCaches();
+            this.isFirstLoad = true;
+            this.deferHeavyPreviewWork = false;
+            this.pendingScroll = null;
+        }
+
+        formatDebugMb(bytes) {
+            return Math.round(bytes / 1024 / 1024 * 10) / 10;
+        }
+
+        sumStringChars(values) {
+            return values.reduce((sum, value) => sum + (typeof value === 'string' ? value.length : 0), 0);
+        }
+
+        getPayloadStats(payload) {
+            const htmls = Array.isArray(payload.htmls) ? payload.htmls : [];
+            const dirtyBlocks = payload.dirtyBlocks ? Object.values(payload.dirtyBlocks) : [];
+            return {
+                type: payload.type,
+                payloadKind: payload.blocks ? `${payload.type}:blocks` : `${payload.type}:htmls`,
+                blocks: payload.blocks ? payload.blocks.length : 0,
+                htmls: htmls.length,
+                htmlChars: this.sumStringChars(htmls),
+                dirtyBlocks: dirtyBlocks.length,
+                dirtyBlockChars: this.sumStringChars(dirtyBlocks),
+                numberingBlocks: payload.numbering?.blocks ? Object.keys(payload.numbering.blocks).length : 0,
+                labels: payload.numbering?.labels ? Object.keys(payload.numbering.labels).length : 0
+            };
+        }
+
+        logPayloadStats(payload) {
+            if (!this.config.debugMemory || !payload) return;
+            console.log('[SnapTeX][webview-payload]', this.getPayloadStats(payload));
+        }
+
+        getCanvasStats() {
+            const canvases = Array.from(document.querySelectorAll('canvas'));
+            let pixels = 0;
+            canvases.forEach(canvas => {
+                pixels += (canvas.width || 0) * (canvas.height || 0);
+            });
+            return {
+                canvasCount: canvases.length,
+                canvasPixels: pixels,
+                canvasApproxMB: this.formatDebugMb(pixels * 4)
+            };
+        }
+
+        getBrowserHeapStats() {
+            const memory = performance && performance.memory;
+            if (!memory) return {};
+            return {
+                jsHeapUsedMB: this.formatDebugMb(memory.usedJSHeapSize || 0),
+                jsHeapTotalMB: this.formatDebugMb(memory.totalJSHeapSize || 0),
+                jsHeapLimitMB: this.formatDebugMb(memory.jsHeapSizeLimit || 0)
+            };
         }
 
         logDomStats(label) {
             if (!this.config.debugMemory) return;
+            const canvasStats = this.getCanvasStats();
             console.log('[SnapTeX][webview]', label, {
+                virtualMode: this.virtualization.isEnabled(),
                 blocks: document.querySelectorAll('.latex-block').length,
                 shells: document.querySelectorAll('.latex-block-shell').length,
                 mountedShells: document.querySelectorAll('.latex-block-shell[data-mounted="true"]').length,
+                contentChildren: this.contentRoot.children.length,
+                ...this.virtualization.getCacheStats(),
+                pendingBlockHtmlRequests: this.pendingBlockHtmlRequests.size,
+                katexNodes: document.querySelectorAll('.katex').length,
+                mathmlNodes: document.querySelectorAll('math').length,
+                latexTables: document.querySelectorAll('.latex-table').length,
+                tikzContainers: document.querySelectorAll('.tikz-container').length,
                 pdfCanvases: document.querySelectorAll('canvas[data-req-path]').length,
                 renderedPdfs: document.querySelectorAll('canvas[data-rendered="true"]').length,
-                tikzScripts: document.querySelectorAll('script[type="text/tikz"]').length,
+                tikzScripts: document.querySelectorAll('script[type="text/tikz"], script[type="text/snaptex-tikz"]').length,
                 svgCount: document.querySelectorAll('svg').length,
-                scrollHeight: document.documentElement.scrollHeight
+                ...canvasStats,
+                scrollHeight: document.documentElement.scrollHeight,
+                debugStats: { ...this.debugStats },
+                ...this.getBrowserHeapStats()
             });
         }
 
@@ -618,6 +762,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
 
         onVirtualBlockMounted(block) {
             if (!block) return;
+            this.debugStats.blockMounts += 1;
 
             const shell = block.closest('.latex-block-shell');
             this.attachStaleTikzPreviews(block, this.consumeStaleTikzPreviewsFromShell(shell));
@@ -625,16 +770,8 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             if (this.currentNumbering) {
                 requestAnimationFrame(() => this.applyNumbering(this.currentNumbering));
             }
-            this.schedulePendingPdfRender();
-            this.triggerTikzRendering();
-        }
-
-        updateScrollDirection() {
-            const currentY = window.scrollY;
-            const delta = currentY - this.lastVirtualScrollY;
-            if (Math.abs(delta) > 2) {
-                this.scrollDirection = delta < 0 ? 'up' : 'down';
-                this.lastVirtualScrollY = currentY;
+            if (!this.deferHeavyPreviewWork) {
+                this.scheduleHeavyPreviewWork();
             }
         }
 
@@ -653,7 +790,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             }
             this.virtualCleanupTimer = setTimeout(() => {
                 this.virtualCleanupTimer = null;
-                this.updateVirtualizedBlocks({ allowUnmount: true });
+                this.updateVirtualizedBlocks({ allowUnmount: true, pruneHtmlCache: true });
             }, BLOCK_VIRTUALIZATION_CLEANUP_DELAY_MS);
         }
 
@@ -663,8 +800,9 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                 block => this.onVirtualBlockMounted(block),
                 shell => this.requestVirtualBlockHtml(shell),
                 {
-                    direction: this.scrollDirection,
-                    allowUnmount: options.allowUnmount !== false
+                    allowUnmount: options.allowUnmount !== false,
+                    phase: options.phase || 'normal',
+                    pruneHtmlCache: options.pruneHtmlCache === true
                 }
             );
         }
@@ -675,6 +813,18 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
 
         getShellByIndex(index) {
             return this.contentRoot.querySelector('.latex-block-shell[data-index="' + index + '"]');
+        }
+
+        forEachDirtyBlock(payload, callback) {
+            if (!payload.dirtyBlocks) return;
+            Object.entries(payload.dirtyBlocks).forEach(([indexStr, html]) => callback(Number(indexStr), html));
+        }
+
+        insertElementsBefore(elements, referenceNode) {
+            if (elements.length === 0) return;
+            const fragment = document.createDocumentFragment();
+            elements.forEach(element => fragment.appendChild(element));
+            this.contentRoot.insertBefore(fragment, referenceNode);
         }
 
         getLatexBlockFromTarget(target) {
@@ -826,43 +976,47 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                 forceMount: requestOptions.forceMount === true,
                 callbacks: requestOptions.onLoaded ? [requestOptions.onLoaded] : []
             });
-            vscode.postMessage({ command: WebviewToExtensionCommand.RequestBlockHtml, id, index, hash });
+            this.debugStats.blockHtmlRequestsSent += 1;
+            previewBridge.postMessage({ command: PreviewToHostCommand.RequestBlockHtml, id, index, hash });
             return true;
         }
 
         handleBlockHtml(message) {
             const pending = this.pendingBlockHtmlRequests.get(message.id);
-            if (pending) {
-                this.pendingBlockHtmlRequests.delete(message.id);
-            }
+            if (!pending) return;
+            this.pendingBlockHtmlRequests.delete(message.id);
             if (message.error || !message.html) {
-                const index = pending?.index ?? message.index;
+                const index = pending.index;
                 const shell = this.getShellByIndex(index);
                 if (shell) {
                     shell.removeAttribute('data-html-request-id');
                 }
-                pending?.callbacks?.forEach(callback => callback(null));
+                pending.callbacks.forEach(callback => callback(null));
                 return;
             }
 
-            const index = typeof message.index === 'number' ? message.index : pending?.index;
-            const hash = message.hash || pending?.hash || '';
+            const index = typeof message.index === 'number' ? message.index : pending.index;
+            const hash = message.hash || pending.hash || '';
+            const htmlChars = message.html.length;
+            this.debugStats.blockHtmlResponses += 1;
+            this.debugStats.blockHtmlChars += htmlChars;
+            this.debugStats.maxBlockHtmlChars = Math.max(this.debugStats.maxBlockHtmlChars, htmlChars);
             const shell = this.virtualization.storeBlockHtml(index, hash, message.html);
             if (shell) {
                 shell.removeAttribute('data-html-request-id');
             }
             if (!shell) {
-                pending?.callbacks?.forEach(callback => callback(null));
+                pending.callbacks.forEach(callback => callback(null));
                 return;
             }
-            if (!pending?.forceMount && !this.virtualization.isShellInMountRange(shell, this.scrollDirection)) return;
+            if (!pending.forceMount && !this.virtualization.isShellInMountRange(shell)) return;
 
-            const block = this.virtualization.mountShell(
+            const block = this.virtualization.withViewportAnchorPreserved(() => this.virtualization.mountShell(
                 shell,
                 missingShell => this.requestVirtualBlockHtml(missingShell)
-            );
+            ));
             if (block) { this.onVirtualBlockMounted(block); }
-            pending?.callbacks?.forEach(callback => callback(block || null));
+            pending.callbacks.forEach(callback => callback(block || null));
         }
 
         getPendingTikzContainers(root = document) {
@@ -915,42 +1069,90 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
         async runTikzRenderBatch() {
             if (!this.contentRoot.querySelector(TIKZ_SCRIPT_SELECTOR) || window.tikzJaxFailed) return;
 
-            await window.ensureTikzJaxLoaded();
             const containers = this.getPendingTikzContainers(this.contentRoot);
             if (containers.length === 0 || window.tikzJaxFailed) return;
+            await window.ensureTikzJaxLoaded();
 
             if (this.config.debugMemory) {
                 console.log('[SnapTeX] Loading TikZJax for TikZ content...');
             }
-            window.watchPendingTikzContainers(this.contentRoot);
-            const activated = window.activatePendingTikzScripts(this.contentRoot);
+            window.watchPendingTikzContainers(this.contentRoot, containers);
+            const activated = window.activatePendingTikzScripts(this.contentRoot, containers);
             if (activated === 0) return;
+            this.debugStats.tikzBatchRuns += 1;
+            this.debugStats.tikzActivatedScripts += activated;
+            this.logDomStats('after tikz activation');
 
             await this.waitForTikzBatch(containers);
+            this.logDomStats('after tikz batch');
         }
 
         triggerTikzRendering() {
             const pendingTikz = this.contentRoot.querySelector(TIKZ_SCRIPT_SELECTOR);
             if (!pendingTikz || window.tikzJaxFailed) return;
 
-            window.ensureTikzJaxLoaded().catch(() => {});
             this.tikzRenderScheduler.request();
         }
 
-        onRenderComplete(savedScrollState) {
+        scheduleHeavyPreviewWork() {
+            this.schedulePendingPdfRender();
+            this.triggerTikzRendering();
+        }
+
+        scheduleInitialVirtualExpansion(includeHeavyWork) {
+            if (this.initialExpansionFrame) {
+                cancelAnimationFrame(this.initialExpansionFrame);
+            }
+
+            this.initialExpansionFrame = requestAnimationFrame(() => {
+                this.initialExpansionFrame = requestAnimationFrame(() => {
+                    this.initialExpansionFrame = null;
+                    this.deferHeavyPreviewWork = true;
+                    try {
+                        this.updateVirtualizedBlocks({ allowUnmount: false, phase: 'normal' });
+                    } finally {
+                        this.deferHeavyPreviewWork = false;
+                    }
+                    this.logDomStats('after initial virtual expansion');
+                    if (includeHeavyWork) {
+                        this.scheduleHeavyPreviewWork();
+                    }
+                });
+            });
+        }
+
+        onRenderComplete(savedScrollState, renderSeq) {
+            if (renderSeq !== this.renderCompletionSeq) return;
+            const wasFirstLoad = this.isFirstLoad;
+            const wasDeferringHeavyWork = this.deferHeavyPreviewWork;
             this.state = 'IDLE';
             document.body.classList.remove('preload-mode');
-            let scrollHandled = false;
             if (this.pendingScroll) {
                 this.executeScroll(this.pendingScroll);
                 this.pendingScroll = null;
-                scrollHandled = true;
             } else if (!this.isFirstLoad) {
                 this.restoreScrollState(savedScrollState);
-                scrollHandled = true;
             }
             this.isFirstLoad = false;
-            this.schedulePendingPdfRender();
+            this.deferHeavyPreviewWork = false;
+            if (wasFirstLoad && this.virtualization.isEnabled()) {
+                this.scheduleInitialVirtualExpansion(wasDeferringHeavyWork);
+            } else if (wasDeferringHeavyWork) {
+                this.scheduleHeavyPreviewWork();
+            } else {
+                this.schedulePendingPdfRender();
+            }
+        }
+
+        onPatchComplete(savedScrollState, renderSeq) {
+            if (renderSeq !== this.renderCompletionSeq) return;
+            this.state = 'IDLE';
+            if (this.pendingScroll) {
+                this.executeScroll(this.pendingScroll);
+                this.pendingScroll = null;
+            } else {
+                this.restoreScrollState(savedScrollState);
+            }
         }
 
         handleScrollCommand(data) {
@@ -961,6 +1163,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
         onScroll() {
             if (this.state !== 'IDLE') return;
             const now = Date.now();
+            if (now < this.previewLayoutSyncSuppressedUntil) return;
             if (now - this.lastScrollTime < this.config.autoScrollDelay) return;
             this.lastScrollTime = now;
             const blocks = document.querySelectorAll('.latex-block, .latex-block-shell');
@@ -974,7 +1177,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                         const offset = viewCenter - rect.top;
                         ratio = Math.max(0, Math.min(1, offset / rect.height));
                     }
-                    vscode.postMessage({ command: WebviewToExtensionCommand.SyncScroll, index: index, ratio: ratio });
+                    previewBridge.postMessage({ command: PreviewToHostCommand.SyncScroll, index: index, ratio: ratio });
                     break;
                 }
             }
@@ -988,29 +1191,50 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                     const rect = block.getBoundingClientRect();
                     const relativeY = event.clientY - rect.top;
                     const ratio = Math.max(0, Math.min(1, relativeY / rect.height));
-                    let anchorText = "";
+                    let anchors = [];
                     const selection = window.getSelection();
                     if (selection && selection.toString().trim().length > 0) {
-                        anchorText = selection.toString().trim();
+                        const selectedText = selection.toString().replace(/\s+/g, ' ').trim();
+                        anchors = [selectedText, selectedText.split(' ')[0]];
                     } else if (document.caretRangeFromPoint) {
                         const range = document.caretRangeFromPoint(event.clientX, event.clientY);
                         if (range && range.startContainer.nodeType === Node.TEXT_NODE) {
-                            const text = range.startContainer.textContent;
+                            const text = range.startContainer.textContent || '';
                             const offset = range.startOffset;
-                            let start = offset, end = offset;
-                            while (start > 0 && /\S/.test(text[start - 1])) start--;
-                            while (end < text.length && /\S/.test(text[end])) end++;
-                            if (end > start) { anchorText = text.substring(start, end); }
+                            const words = Array.from(text.matchAll(/\S+/g));
+                            const wordIndex = words.findIndex(word => {
+                                const start = word.index;
+                                return offset >= start && offset <= start + word[0].length;
+                            });
+                            if (wordIndex >= 0) {
+                                const clickedWord = words[wordIndex][0];
+                                const context = words
+                                    .slice(Math.max(0, wordIndex - 2), wordIndex + 3)
+                                    .map(word => word[0])
+                                    .join(' ');
+                                anchors = [context, clickedWord];
+                            }
                         }
                     }
-                    vscode.postMessage({
-                        command: WebviewToExtensionCommand.RevealLine, index: parseInt(index), ratio: ratio, anchor: anchorText, viewRatio: event.clientY / window.innerHeight
+                    const sourceAnchor = event.target.closest('[data-sn-src-start]');
+                    previewBridge.postMessage({
+                        command: PreviewToHostCommand.RevealLine,
+                        index: parseInt(index),
+                        ratio,
+                        anchors,
+                        sourceStart: sourceAnchor ? Number(sourceAnchor.getAttribute('data-sn-src-start')) : undefined,
+                        sourceEnd: sourceAnchor ? Number(sourceAnchor.getAttribute('data-sn-src-end')) : undefined,
+                        viewRatio: event.clientY / window.innerHeight
                     });
                 }
             }
         }
 
         saveScrollState() {
+            if (window.scrollY <= 1) {
+                return { scrollY: 0 };
+            }
+
             const blocks = document.querySelectorAll('.latex-block, .latex-block-shell');
             for (const block of blocks) {
                 const rect = block.getBoundingClientRect();
@@ -1022,52 +1246,77 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
         }
 
         restoreScrollState(state) {
-            if (!state || !state.index) return;
-            const block = this.getBlockOrShellByIndex(state.index);
-            if (block) {
+            if (!state) return;
+            let targetY = typeof state.scrollY === 'number' ? state.scrollY : null;
+            if (targetY === null && state.index) {
+                const block = this.getBlockOrShellByIndex(state.index);
+                if (!block) return;
                 const newTop = block.getBoundingClientRect().top + window.scrollY;
-                let targetY = state.ratio >= 0 ? newTop + (block.offsetHeight * state.ratio) : newTop;
-                this.lockScrolling(500);
-                window.scrollTo({ top: targetY, behavior: 'auto' });
+                targetY = state.ratio >= 0 ? newTop + (block.offsetHeight * state.ratio) : newTop;
             }
+            if (targetY === null || Math.abs(window.scrollY - targetY) < 1) return;
+            this.lockScrolling(500);
+            window.scrollTo({ top: targetY, behavior: 'auto' });
         }
 
         async executeScroll(data) {
-            const { index, ratio, anchor, auto, viewRatio = 0.5 } = data;
+            const { index, ratio, anchor, sourceStart, sourceEnd, auto, viewRatio = 0.5 } = data;
             const scrollSeq = ++this.scrollCommandSeq;
 
-            const mountResult = await this.ensureBlockMountedByIndex(index);
-            if (scrollSeq !== this.scrollCommandSeq) return;
-            const target = mountResult.target;
-            if (!auto || mountResult.mounted) {
-                await this.waitForLayout();
-                if (scrollSeq !== this.scrollCommandSeq) return;
-            }
-
-            if (target) {
-                const calcY = () => {
-                    if (!target.isConnected) return window.scrollY;
-                    const rect = target.getBoundingClientRect();
-                    const absoluteTop = rect.top + window.scrollY;
-                    let y = absoluteTop + (ratio || 0) * rect.height - (window.innerHeight * viewRatio);
-                    if (anchor) {
-                        const textTop = this.findTextOffsetInBlock(target, anchor);
-                        if (textTop !== null) { y = textTop + window.scrollY - (window.innerHeight * viewRatio); }
-                    }
-                    return y;
-                };
-                const targetY = calcY();
+            const scrollToTarget = (target, useAnchor) => {
+                if (!target?.isConnected) return false;
+                const rect = target.getBoundingClientRect();
+                const absoluteTop = rect.top + window.scrollY;
+                let targetY = absoluteTop + (ratio || 0) * rect.height - (window.innerHeight * viewRatio);
+                const sourceTarget = this.findSourceAnchorInBlock(target, sourceStart, sourceEnd);
+                if (sourceTarget) {
+                    const sourceRect = sourceTarget.getBoundingClientRect();
+                    targetY = sourceRect.top + window.scrollY - (window.innerHeight * viewRatio);
+                }
+                if (!sourceTarget && useAnchor && anchor) {
+                    const textTop = this.findTextOffsetInBlock(target, anchor);
+                    if (textTop !== null) { targetY = textTop + window.scrollY - (window.innerHeight * viewRatio); }
+                }
                 const currentY = window.scrollY;
                 const autoSkipThreshold = 12;
-                if (Math.abs(currentY - targetY) < autoSkipThreshold && auto) { return; }
+                if (Math.abs(currentY - targetY) < autoSkipThreshold && auto) { return true; }
                 const lockTime = auto ? 600 : 1000;
                 this.lockScrolling(lockTime);
                 window.scrollTo({ top: targetY, behavior: 'auto' });
-                if (!auto) {
+                return true;
+            };
+
+            const target = this.getBlockByIndex(index);
+            if (target) {
+                await this.waitForLayout();
+                if (scrollSeq !== this.scrollCommandSeq) return;
+                if (scrollToTarget(target, true) && !auto) {
                     target.classList.add('jump-highlight');
                     setTimeout(() => target.classList.remove('jump-highlight'), 1000);
+                    const sourceTarget = this.findSourceAnchorInBlock(target, sourceStart, sourceEnd);
+                    if (sourceTarget) this.highlightElement(sourceTarget);
                     if (anchor) this.highlightTextInNode(target, anchor);
                 }
+                return;
+            }
+
+            const shell = this.getShellByIndex(index);
+            if (!shell) return;
+
+            scrollToTarget(shell, false);
+            const block = await this.ensureShellMounted(shell);
+            if (scrollSeq !== this.scrollCommandSeq) return;
+
+            const finalTarget = block || shell;
+            await this.waitForLayout();
+            if (scrollSeq !== this.scrollCommandSeq) return;
+
+            if (scrollToTarget(finalTarget, Boolean(block)) && !auto) {
+                finalTarget.classList.add('jump-highlight');
+                setTimeout(() => finalTarget.classList.remove('jump-highlight'), 1000);
+                const sourceTarget = block ? this.findSourceAnchorInBlock(block, sourceStart, sourceEnd) : null;
+                if (sourceTarget) this.highlightElement(sourceTarget);
+                if (block && anchor) this.highlightTextInNode(block, anchor);
             }
         }
 
@@ -1088,11 +1337,12 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
             this.smartFullUpdateElements(newElements, preserveUnchangedBlocks);
         }
 
-        smartFullUpdateFromBlockMetadata(blocks) {
+        smartFullUpdateFromBlockMetadata(blocks, options = {}) {
             this.virtualization.replaceContentWithBlockMetadata(
                 blocks,
                 block => this.onVirtualBlockMounted(block),
-                shell => this.requestVirtualBlockHtml(shell)
+                shell => this.requestVirtualBlockHtml(shell),
+                options
             );
         }
 
@@ -1138,25 +1388,15 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                 this.rememberStaleTikzPreviews(block, staleTikzByIndex);
             }
 
-            const insertedBlocks = [];
             for (let i = 0; i < deleteCount; i++) {
                 if (this.contentRoot.children[start]) this.contentRoot.removeChild(this.contentRoot.children[start]);
             }
-            if (htmls.length > 0) {
-                const fragment = document.createDocumentFragment();
-                htmls.forEach(html => {
-                    const node = parseFirstElementFromHtml(html);
-                    if (node) {
-                        insertedBlocks.push(node);
-                        fragment.appendChild(node);
-                    }
-                });
-                this.contentRoot.insertBefore(fragment, referenceNode);
-                insertedBlocks.forEach(block => {
-                    const index = block.getAttribute('data-index');
-                    this.attachStaleTikzPreviews(block, staleTikzByIndex.get(index));
-                });
-            }
+            const insertedBlocks = htmls.map(html => parseFirstElementFromHtml(html)).filter(Boolean);
+            this.insertElementsBefore(insertedBlocks, referenceNode);
+            insertedBlocks.forEach(block => {
+                const index = block.getAttribute('data-index');
+                this.attachStaleTikzPreviews(block, staleTikzByIndex.get(index));
+            });
             if (shift !== 0) {
                 let node = this.contentRoot.children[start + htmls.length];
                 while (node) {
@@ -1165,18 +1405,11 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                     node = node.nextElementSibling;
                 }
             }
-            if (payload.dirtyBlocks) {
-                Object.keys(payload.dirtyBlocks).forEach(indexStr => {
-                    const idx = parseInt(indexStr);
-                    const targetBlock = this.getBlockByIndex(idx);
-                    if (targetBlock) {
-                        const replacement = parseFirstElementFromHtml(payload.dirtyBlocks[idx]);
-                        if (replacement) {
-                            this.replaceBlockPreservingTikz(targetBlock, replacement);
-                        }
-                    }
-                });
-            }
+            this.forEachDirtyBlock(payload, (idx, html) => {
+                const targetBlock = this.getBlockByIndex(idx);
+                const replacement = targetBlock ? parseFirstElementFromHtml(html) : null;
+                if (replacement) this.replaceBlockPreservingTikz(targetBlock, replacement);
+            });
             this.virtualization.pruneCachesFromContent();
         }
 
@@ -1204,32 +1437,23 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                 insertedShells.push(shell);
             });
 
-            if (insertedShells.length > 0) {
-                const fragment = document.createDocumentFragment();
-                insertedShells.forEach(shell => fragment.appendChild(shell));
-                this.contentRoot.insertBefore(fragment, referenceNode);
-            }
+            this.insertElementsBefore(insertedShells, referenceNode);
 
             if (shift !== 0) {
-                this.virtualization.remapShellIndices(start + insertedShells.length, shift);
+                this.virtualization.remapShellIndicesFromDomPosition(start + insertedShells.length, shift);
             }
 
-            if (payload.dirtyBlocks) {
-                Object.keys(payload.dirtyBlocks).forEach(indexStr => {
-                    const idx = parseInt(indexStr);
-                    const shell = this.getShellByIndex(idx);
-                    if (!shell) return;
+            this.forEachDirtyBlock(payload, (idx, html) => {
+                const shell = this.getShellByIndex(idx);
+                const replacement = shell ? parseFirstElementFromHtml(html) : null;
+                if (!replacement) return;
 
-                    const replacement = parseFirstElementFromHtml(payload.dirtyBlocks[idx]);
-                    if (!replacement) return;
-
-                    const previews = this.collectTikzPreviews(shell);
-                    const newShell = this.virtualization.createShellForBlock(replacement);
-                    this.stashStaleTikzPreviewsOnShell(newShell, previews);
-                    this.virtualization.unobserveShell(shell);
-                    shell.replaceWith(newShell);
-                });
-            }
+                const previews = this.collectTikzPreviews(shell);
+                const newShell = this.virtualization.createShellForBlock(replacement);
+                this.stashStaleTikzPreviewsOnShell(newShell, previews);
+                this.virtualization.unobserveShell(shell);
+                shell.replaceWith(newShell);
+            });
 
             this.updateVirtualizedBlocks();
             this.virtualization.pruneCachesFromContent();
@@ -1247,7 +1471,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                     const spans = blockEl.querySelectorAll('.sn-cnt[data-type="' + type + '"]');
                     spans.forEach((span, i) => { if (values[i]) span.textContent = values[i]; });
                 };
-                fill('eq', counts.eq); fill('fig', counts.fig); fill('tbl', counts.tbl);
+                fill('eq', counts.eq); fill('fig', counts.fig); fill('subfig', counts.subfig); fill('tbl', counts.tbl);
                 fill('alg', counts.alg); fill('sec', counts.sec); fill('thm', counts.thm);
             }
             if (labels) {
@@ -1261,6 +1485,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
 
         initPdfObserver() {
             if (!('IntersectionObserver' in window)) return;
+            const rootMargin = `${viewportHeightToPixels(PDF_RENDER_MARGIN_VH)}px`;
             this.pdfObserver = new IntersectionObserver(entries => {
                 entries.forEach(entry => {
                     if (!entry.isIntersecting) return;
@@ -1269,7 +1494,7 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                     this.pdfObserver.unobserve(canvas);
                     canvas.removeAttribute('data-pdf-observed');
                 });
-            }, { rootMargin: '1200px' });
+            }, { rootMargin });
         }
 
         requestPdfCanvas(canvas) {
@@ -1317,13 +1542,16 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
         }
 
         renderPendingPdfs() {
+            this.debugStats.pdfRenderRuns += 1;
             const pdfCanvases = document.querySelectorAll('canvas[data-req-path]');
+            const renderMargin = viewportHeightToPixels(PDF_RENDER_MARGIN_VH);
+            const releaseMargin = viewportHeightToPixels(PDF_RELEASE_MARGIN_VH);
             pdfCanvases.forEach(canvas => {
-                if (!isElementWithinViewportMargins(canvas, PDF_RELEASE_MARGIN)) {
+                if (!isElementWithinViewportMargins(canvas, releaseMargin)) {
                     this.releasePdfCanvasBitmap(canvas);
                 }
                 if (canvas.getAttribute('data-rendered') || canvas.getAttribute('data-requested')) return;
-                if (isElementWithinViewportMargins(canvas, PDF_RENDER_MARGIN)) {
+                if (isElementWithinViewportMargins(canvas, renderMargin)) {
                     this.requestPdfCanvas(canvas);
                     return;
                 }
@@ -1374,6 +1602,21 @@ const vscode = window.snaptexVsCodeApi || acquireVsCodeApi();
                 }
             }, 2000);
             return true;
+        }
+
+        highlightElement(element) {
+            element.classList.add('highlight-word');
+            setTimeout(() => element.classList.remove('highlight-word'), 2000);
+        }
+
+        findSourceAnchorInBlock(rootElement, sourceStart, sourceEnd) {
+            if (typeof sourceStart !== 'number' || Number.isNaN(sourceStart)) return null;
+            const anchors = Array.from(rootElement.querySelectorAll('[data-sn-src-start]'));
+            return anchors.find(anchor => {
+                const start = Number(anchor.getAttribute('data-sn-src-start'));
+                const end = Number(anchor.getAttribute('data-sn-src-end'));
+                return start === sourceStart && (typeof sourceEnd !== 'number' || Number.isNaN(sourceEnd) || end === sourceEnd);
+            }) || null;
         }
 
         findTextOffsetInBlock(rootElement, text) {

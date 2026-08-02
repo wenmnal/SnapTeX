@@ -1,21 +1,50 @@
-import { REGEX_STR } from './patterns';
-import { BlockTextSpan } from './types';
+import { BlockTextSpan, SplitterOptions, SplitterRule } from './types';
 import { scanLatexBraceBalance } from './utils';
+
+type SplitterEnvRule = Extract<SplitterRule, { envPattern: RegExp }>;
+type SplitterEnvRuleKind = SplitterEnvRule['kind'];
+
+function testPattern(pattern: RegExp, value: string): boolean {
+    pattern.lastIndex = 0;
+    const matched = pattern.test(value);
+    pattern.lastIndex = 0;
+    return matched;
+}
+
+export function findSplitterEnvRule<K extends SplitterEnvRuleKind>(
+    rules: readonly SplitterRule[],
+    kind: K,
+    envName: string
+): Extract<SplitterEnvRule, { kind: K }> | undefined {
+    return rules.find((rule): rule is Extract<SplitterEnvRule, { kind: K }> =>
+        rule.kind === kind && 'envPattern' in rule && testPattern(rule.envPattern, envName)
+    );
+}
+
+export function matchesSplitterEnvRule(rules: readonly SplitterRule[], kind: SplitterEnvRuleKind, envName: string): boolean {
+    return findSplitterEnvRule(rules, kind, envName) !== undefined;
+}
+
+export function matchesSplitterBeginTokenRule(rules: readonly SplitterRule[], buffer: string): boolean {
+    return rules.some(rule => rule.kind === 'no-emergency-split-begin-token' && testPattern(rule.beginTokenPattern, buffer));
+}
 
 /**
  * Splits cleaned LaTeX body text into preview blocks.
  *
  * The splitter prefers paragraph and environment boundaries, but it can recover
  * from unmatched braces/environments so one broken area does not trap the rest
- * of the document in a single block. TikZ pictures are exempt from max-line
- * emergency splitting because they are compiled as one unit.
+ * of the document in a single block. Registry splitter rules declare which
+ * environments or brace groups should resist emergency splitting.
  */
 export class LatexBlockSplitter {
-    public static split(text: string, maxLines: number = 40): BlockTextSpan[] {
+    public static split(text: string, options: SplitterOptions): BlockTextSpan[] {
         const blocks: BlockTextSpan[] = [];
         let currentBuffer = "";
         let envStack: string[] = [];
         let braceDepth = 0;
+        const maxBlockLines = Math.max(1, Math.floor(options.config.maxBlockLines));
+        const maxNoEmergencySplitLines = Math.max(maxBlockLines, Math.floor(options.config.maxNoEmergencySplitLines));
 
         let currentLine = 0;
         let bufferStartLine = 0;
@@ -41,13 +70,11 @@ export class LatexBlockSplitter {
             startNextBlock(startLine, startIndex);
         };
 
-        const regex = /(?:\\\$|\\\{|\\\})|(?:(?<!\\)%.*)|(\\begin\{([^}]+)\})|(\\end\{([^}]+)\})|(\{)|(\})|(\n\s*\n)|(?<!\\)(\$\$|\\\[|\\\])/g;
+        const cleanEnvironmentName = (name: string) => name.replace(/\s*\[[^\]]*\]\s*$/, '').trim();
+
+        const regex = /(?:\\\$|\\\{|\\\})|(?:(?<!\\)%.*)|(\\begin\{([^}]+)\}(?:\s*\[[^\]]*\])?)|(\\end\{([^}]+)\})|(\{)|(\})|(\n\s*\n)|(?<!\\)(\$\$|\\\[|\\\])/g;
         let lastIndex = 0;
         let match;
-
-        const ignoredEnvRegex = new RegExp(`^(${REGEX_STR.SPLITTER_IGNORED})$`);
-        const majorEnvRegex = new RegExp(`^(${REGEX_STR.SPLITTER_MAJOR})\\*?$`);
-        const mathEnvRegex = new RegExp(`^(${REGEX_STR.MATH_ENVS})\\*?$`);
 
         while ((match = regex.exec(text)) !== null) {
             const preMatch = text.substring(lastIndex, match.index);
@@ -61,20 +88,20 @@ export class LatexBlockSplitter {
             const [isBegin, beginName, isEnd, endName, isOpenBrace, isCloseBrace, isDoubleNewline, isMathSymbol] =
                   [match[1], match[2], match[3], match[4], match[5], match[6], match[7], match[8]];
 
-            // Strip optional args from environment names (e.g. frame[plain] → frame)
-            const cleanBeginName = beginName ? beginName.replace(/\[.*\]$/, '') : '';
-            const cleanEndName = endName ? endName.replace(/\[.*\]$/, '') : '';
-
             const currentBufferLineCount = (currentBuffer.match(/\n/g) || []).length;
 
-            const hasTikzPictureInBuffer = /\\begin\{tikzpicture\}/.test(currentBuffer);
-            const isInsideTikzPicture = envStack.includes('tikzpicture');
-            const isTrapped = currentBufferLineCount >= maxLines && !isInsideTikzPicture && !hasTikzPictureInBuffer;
+            const withinNoEmergencySplitBudget = currentBufferLineCount <= maxNoEmergencySplitLines;
+            const hasNoEmergencySplitBeginTokenInBuffer = withinNoEmergencySplitBudget && matchesSplitterBeginTokenRule(options.rules, currentBuffer);
+            const isInsideNoEmergencySplitEnv = withinNoEmergencySplitBudget
+                && envStack.some(envName => matchesSplitterEnvRule(options.rules, 'no-emergency-split-env', envName));
+            const isTrapped = currentBufferLineCount >= maxBlockLines
+                && !isInsideNoEmergencySplitEnv
+                && !hasNoEmergencySplitBeginTokenInBuffer;
 
             if (isDoubleNewline) {
                 let shouldReset = false;
 
-                if (envStack.length === 0 && braceDepth > 0) {
+                if (envStack.length === 0 && braceDepth > 0 && !hasNoEmergencySplitBeginTokenInBuffer) {
                     const canCloseSoon = scanLatexBraceBalance(text, {
                         start: regex.lastIndex,
                         initialDepth: braceDepth,
@@ -85,7 +112,7 @@ export class LatexBlockSplitter {
                     if (!canCloseSoon) { shouldReset = true; }
                 }
 
-                if (isTrapped && (envStack.length > 0 || braceDepth > 0)) {
+                if (isTrapped && (envStack.length > 0 || braceDepth > 0) && !hasNoEmergencySplitBeginTokenInBuffer) {
                     shouldReset = true;
                 }
 
@@ -104,13 +131,15 @@ export class LatexBlockSplitter {
                 }
             }
             else if (isBegin && beginName) {
-                const isIgnoredEnv = ignoredEnvRegex.test(cleanBeginName);
+                const cleanBeginName = cleanEnvironmentName(beginName);
+                const isIgnoredEnv = matchesSplitterEnvRule(options.rules, 'ignored-env', cleanBeginName);
 
                 if (!isIgnoredEnv) {
-                    const isMajorEnv = majorEnvRegex.test(cleanBeginName);
+                    const isMajorEnv = matchesSplitterEnvRule(options.rules, 'split-env', cleanBeginName);
+                    const beginsNoEmergencySplitEnv = matchesSplitterEnvRule(options.rules, 'no-emergency-split-env', cleanBeginName);
 
-                    if (isMajorEnv && (envStack.length === 0 && braceDepth === 0 || isTrapped)) {
-                          if (currentBuffer.trim().length > 0) {
+                    if (isMajorEnv && (envStack.length === 0 && braceDepth === 0 || isTrapped && !beginsNoEmergencySplitEnv)) {
+                        if (currentBuffer.trim().length > 0) {
                             pushCurrentBlockAndStartAt(match.index, currentLine, match.index);
                             if (isTrapped) { envStack = []; braceDepth = 0; }
                         }
@@ -121,7 +150,8 @@ export class LatexBlockSplitter {
                 currentLine += matchLines;
             }
             else if (isEnd && endName) {
-                const isIgnoredEnv = ignoredEnvRegex.test(cleanEndName);
+                const cleanEndName = cleanEnvironmentName(endName);
+                const isIgnoredEnv = matchesSplitterEnvRule(options.rules, 'ignored-env', cleanEndName);
                 if (!isIgnoredEnv) {
                     const idx = envStack.lastIndexOf(cleanEndName);
                     if (idx !== -1) { envStack = envStack.slice(0, idx); }
@@ -129,8 +159,8 @@ export class LatexBlockSplitter {
                 currentBuffer += fullMatch;
                 currentLine += matchLines;
 
-                const isMathEnv = mathEnvRegex.test(cleanEndName);
-                if (isMathEnv && isTrapped) {
+                const isEmergencySplitEndEnv = matchesSplitterEnvRule(options.rules, 'emergency-split-end-env', cleanEndName);
+                if (isEmergencySplitEndEnv && isTrapped) {
                     if (currentBuffer.trim().length > 0) {
                         pushCurrentBlockAndStartAt(regex.lastIndex, currentLine, regex.lastIndex);
                         envStack = [];

@@ -2,29 +2,14 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="
-        default-src 'none';
-        script-src {{cspSource}} 'unsafe-inline' 'unsafe-eval' blob:;
-        worker-src {{cspSource}} blob:;
-        style-src {{cspSource}} 'unsafe-inline';
-        font-src {{cspSource}} data:;
-        img-src {{cspSource}} data: blob:;
-        connect-src {{cspSource}} blob:;
-    ">
+    {{cspMeta}}
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" href="{{katexCssUri}}">
-    {{mathjaxCssBlock}}
-    <link rel="stylesheet" href="{{styleUri}}">
-    <link rel="stylesheet" href="{{tikzJaxCssUri}}">
+{{styleLinks}}
     <title>SnapTeX Preview</title>
 </head>
-<body
-    data-tikz-jax-js-uri="{{tikzJaxJsUri}}"
-    data-pdf-js-uri="{{pdfJsUri}}"
-    data-pdf-worker-uri="{{pdfWorkerUri}}"
->
+<body{{bodyData}}>
 <div id="content-root"></div>
-<script src="{{webviewMainUri}}"></script>
-<script src="{{webviewPdfUri}}"></script>
+{{bridgeScript}}
+{{scripts}}
 </body>
 </html>

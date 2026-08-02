@@ -2,6 +2,50 @@
 
 All notable changes to the "SnapTeX" extension will be documented in this file.
 
+## [0.7.1] - 2026-07-09
+- **Added**: Added the experimental `snaptex.backendMode` setting with an AST-assisted preview backend for testing structured splitting, rendering, dependencies, and source sync while keeping the legacy backend as the default.
+- **Added**: Added AST-aware rendering support for sections, math, citations, links, lists, floats, tables, algorithms, theorem/proof wrappers, TikZ, and source-sync anchors.
+- **Added**: Added `subfigure` rendering in both legacy and AST preview backends, including side-by-side layouts, subcaptions, subfigure numbering, and subfigure label references.
+- **Changed**: Improved the legacy rendering/runtime path for algorithms, nested lists, table notes, TikZ/PDF lazy blocks, preview layout changes, and bidirectional sync messages.
+- **Changed**: Improved AST and legacy preview behavior with source-hint based inline math sync, backend reset handling, and warm AST artifact generation for patched blocks.
+- **Changed**: Focused the automated test suite on behavior-level rendering, sync, web host, and AST/legacy integration coverage.
+- **Fixed**: Stabilized preview auto-scroll during patch updates that split or merge nearby blocks.
+
+## [0.7.0] - 2026-07-07
+- **Changed**: Refactored the VS Code host under `apps/vscode` while preserving the existing VS Code preview workflow.
+- **Changed**: Reused the shared preview update pipeline in the VS Code extension.
+- **Fixed**: Aligned preview tooltips with the VS Code preview pane.
+- **Fixed**: Improved VSIX packaging so web/PWA build artifacts are not included in extension packages.
+
+## [0.6.5] - 2026-07-03
+- **Changed**: Reduced initial preview work in virtual mode by shrinking the first-load and normal block mount windows, improving long-document first-open speed and lowering peak webview memory usage.
+- **Changed**: Pruned cached on-demand block HTML after virtual cleanup when shells move outside the retain window, so scrolling through long documents no longer keeps every previously visited block's HTML in memory.
+- **Changed**: Kept PDF and TikZ work lazy under virtual mode: only mounted blocks trigger heavy preview work, while offscreen shells continue to hold lightweight metadata and measured heights.
+- **Changed**: Removed the old `snaptex.experimentalVirtualization` compatibility setting; `snaptex.virtualMode` is now the only virtual preview switch.
+- **Fixed**: Smoothed upward scrolling in virtual mode by compensating above-viewport shell height changes, including asynchronous media/TikZ/PDF height updates, without widening the preload window.
+- **Added**: Supported common `enumerate` optional label templates such as `[(a)]`, `[(i)]`, `[$G_1$]`, and `[$H_a$]` by replacing `1`, `i`, or `a` counters inside the label template.
+- **Fixed**: Render theorem-like environments as containers so nested lists, tables, and other block rules can render inside definitions, theorems, lemmas, and related environments.
+
+## [0.6.4] - 2026-06-30
+- **Changed**: More stable styling, e.g., `{\it ...}`, `{\color{blue} ...}`.
+- **Changed**: stabilize bidirectional preview synchronization.
+- **Changed**: Support old vscode version.
+- **fixed**: stripLatexComments breaks lines in preamble field.
+
+## [0.6.3] - 2026-06-21
+- **Added**: Introduced an extensible rule registry with `metadataExtractors`, `renderRules`, and `blockDependencyRules`, making custom metadata and dependency-aware rendering rules configurable from `rules.ts`.
+- **Added**: Moved splitter configuration into `rules.ts`, including configurable line budgets, split environments, no-emergency-split environments, protected begin tokens, and emergency split recovery rules.
+- **Added**: Added structured title metadata for `\maketitle`, including multi-author names, emails, affiliations, keywords, and custom metadata fields.
+- **Added**: Supported common author/affiliation metadata styles, including repeated `\author`/`\email`/`\affiliation`, authblk-style `\author[1]`/`\affil[1]`, `\inst`/`\institute`, IEEE author blocks, and ACM/Elsevier-style affiliations.
+- **Added**: Rendered inline `thebibliography` / `\bibitem` references without requiring an external `.bib` file.
+- **Added**: Rendered `\Abstract{...}` / `\Keywords{...}`-style journal commands in addition to environment-based abstracts and keywords.
+- **Changed**: Replaced the old `metadata.fields` path with a structured metadata model and updated maketitle rendering to show authors, email markers, affiliations, and custom editor metadata.
+- **Changed**: Unified metadata-sensitive refreshes with block dependency fingerprints so unchanged source blocks can still update when their declared metadata or citation dependencies change.
+- **Changed**: Improved protected HTML handling for inline LaTeX styles so long colored or old-style styled groups can preserve paragraph breaks without leaking raw tokens.
+- **Changed**: Improved splitter recovery for long TikZ, bibliography, resizebox, color, and old-style text declaration groups while keeping normal command handling in render rules.
+- **Changed**: Tightened renderer payload typing, dependency summaries, block hash handling, and virtualized dirty-block replacement while preserving the fixed full-update threshold.
+- **Changed**: Continued simplifying rendering, table, TikZ, webview, and test code by removing redundant helpers, stale tests, and low-value implementation-detail assertions.
+
 ## [0.6.2] - 2026-06-06
 - **Added**: Generalized LaTeX table rendering with richer `tabular`, `tabular*`, and `tabularx` parsing, including nested tabular cells, `\multicolumn`, `\multirow`, `\makecell`, `\tnote`, `tablenotes`, booktabs-style rules, and literal escaped braces such as `\{22, 9\}`.
 - **Fixed**: Prevented protected space tokens from leaking into nested table math by letting table rendering handle text-mode `~` spacing before global protection runs.
@@ -28,7 +72,7 @@ All notable changes to the "SnapTeX" extension will be documented in this file.
 - **Changed**: Reworked TikZ rendering to lazy-load TikZJax, bootstrap worker assets through blob URLs, cache runtime resources for the webview session, prune unused TikZ libraries per picture, preserve stale SVGs while rerendering, surface compile failures cleanly, add watchdogs, and coalesce edit-triggered render batches.
 - **Changed**: Improved full-update behavior with block text hashes, block-list full payloads, per-block path fixing, and DOM preservation for unchanged blocks while keeping the existing fixed full-update threshold.
 - **Added**: Implemented shell-based virtual mode behind `snaptex.virtualMode`, including shell placeholders, measured/estimated block heights, viewport-near mounting, far-offscreen unmounting, and editor-to-preview sync through shells.
-- **Changed**: Made virtual mode the default low-memory preview path while retaining compatibility with explicit legacy `snaptex.experimentalVirtualization` settings.
+- **Changed**: Made virtual mode the default low-memory preview path controlled by `snaptex.virtualMode`.
 - **Fixed**: Restored `\ref`/citation anchor jumps and hover tooltips under virtual mode by indexing anchors on block shells and mounting the target block on demand.
 - **Fixed**: Stabilized forward sync under virtual mode by mounting the target block before scrolling and cancelling stale auto-sync timers.
 - **Changed**: Replaced fragile manual `scrollY` compensation in virtual mode with a larger directional preload window and delayed cleanup of far-offscreen mounted blocks, making upward scrolling smoother while preserving most memory savings.
